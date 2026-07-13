@@ -1,0 +1,83 @@
+提交目录已生成: /root/gpufree-data/results/ch7_submit/submission
+  submission.csv: 750 行
+  predicted_masks/: 750 个样本
+提交zip已打包: /root/gpufree-data/results/ch7_submit/submission.zip
+设备: cuda
+✅ 模型加载完成 (621 MB)
+
+📦 共 50 个类别
+每类 15 样本 × 5 视角 = 75 次推理/类
+总计: 3750 次推理
+
+[ 1/50] 3_adapter                           μ=0.3158 σ=0.0096 (0m elapsed, ~12m remaining)
+[ 2/50] DVD_switch                          μ=0.3055 σ=0.0127 (0m elapsed, ~10m remaining)
+[ 3/50] D_sub_connector                     μ=0.3254 σ=0.0078 (1m elapsed, ~10m remaining)
+[ 4/50] PLCC_socket                         μ=0.3756 σ=0.0121 (1m elapsed, ~9m remaining)
+[ 5/50] VR_joystick                         μ=0.3123 σ=0.0094 (1m elapsed, ~8m remaining)
+[ 6/50] accurate_detection_switch           μ=0.3292 σ=0.0096 (1m elapsed, ~7m remaining)
+[ 7/50] battery                             μ=0.5591 σ=0.0803 (1m elapsed, ~7m remaining)
+[ 8/50] blade_switch                        μ=0.3348 σ=0.0138 (1m elapsed, ~7m remaining)
+[ 9/50] boost_converter_module              μ=0.3440 σ=0.0126 (1m elapsed, ~6m remaining)
+[10/50] button_battery_holder               μ=0.3796 σ=0.0137 (2m elapsed, ~6m remaining)
+[11/50] circuit_breaker                     μ=0.2895 σ=0.0128 (2m elapsed, ~6m remaining)
+[12/50] connector_housing_female            μ=0.2958 σ=0.0152 (2m elapsed, ~5m remaining)
+[13/50] crimp_st_cable_mount_box            μ=0.3300 σ=0.0109 (2m elapsed, ~5m remaining)
+[14/50] dc_jack                             μ=0.3319 σ=0.0143 (2m elapsed, ~5m remaining)
+[15/50] dc_power_connector                  μ=0.3188 σ=0.0112 (2m elapsed, ~5m remaining)
+[16/50] detection_switch                    μ=0.3228 σ=0.0143 (2m elapsed, ~5m remaining)
+[17/50] effect_transistor                   μ=0.3081 σ=0.0108 (2m elapsed, ~5m remaining)
+[18/50] electronic_watch_movement           μ=0.3290 σ=0.0331 (3m elapsed, ~5m remaining)
+[19/50] ffc_connector_plug                  μ=0.2978 σ=0.0089 (3m elapsed, ~4m remaining)
+[20/50] ingot_buckle                        μ=0.3717 σ=0.0319 (3m elapsed, ~4m remaining)
+[21/50] laser_diode                         μ=0.3711 σ=0.0161 (3m elapsed, ~4m remaining)
+[22/50] lego_pin_connector_plate            μ=0.2867 σ=0.0217 (3m elapsed, ~4m remaining)
+[23/50] limit_switch                        μ=0.3005 σ=0.0096 (3m elapsed, ~4m remaining)
+[24/50] lithium_battery_plug                μ=0.4114 σ=0.0132 (3m elapsed, ~4m remaining)
+[25/50] littel_fuse                         μ=0.3584 σ=0.0183 (4m elapsed, ~4m remaining)
+[26/50] lock                                μ=0.3236 σ=0.0196 (4m elapsed, ~3m remaining)
+[27/50] miniature_lifting_motor             μ=0.3182 σ=0.0203 (4m elapsed, ~3m remaining)
+[28/50] mobile_charging_connector           μ=0.2959 σ=0.0185 (4m elapsed, ~3m remaining)
+[29/50] motor_bracket                       μ=0.3048 σ=0.0182 (4m elapsed, ~3m remaining)
+[30/50] motor_gear_reducer                  μ=0.3112 σ=0.0072 (4m elapsed, ~3m remaining)
+[31/50] motor_plug                          μ=0.2672 σ=0.0120 (4m elapsed, ~3m remaining)
+[32/50] pencil_sharpener                    μ=0.2926 σ=0.0100 (5m elapsed, ~3m remaining)
+[33/50] pinboard_connector                  μ=0.3247 σ=0.0062 (5m elapsed, ~2m remaining)
+[34/50] potentiometer                       μ=0.3562 σ=0.0163 (5m elapsed, ~2m remaining)
+[35/50] power_jack                          μ=0.2828 σ=0.0085 (5m elapsed, ~2m remaining)
+[36/50] power_strip_socket                  μ=0.3266 σ=0.0134 (5m elapsed, ~2m remaining)
+[37/50] purple_clay_pot                     μ=0.2396 σ=0.0391 (6m elapsed, ~2m remaining)
+[38/50] retaining_ring                      μ=0.3492 σ=0.0283 (6m elapsed, ~2m remaining)
+[39/50] rheostat                            μ=0.3115 σ=0.0055 (6m elapsed, ~2m remaining)
+[40/50] self_lock_switch                    μ=0.3332 σ=0.0159 (6m elapsed, ~2m remaining)
+[41/50] silicon_cell_sensor                 μ=0.3090 σ=0.0171 (6m elapsed, ~1m remaining)
+[42/50] single_switch                       μ=0.3209 σ=0.0090 (6m elapsed, ~1m remaining)
+[43/50] smd_receiver_module                 μ=0.2779 σ=0.0247 (6m elapsed, ~1m remaining)
+[44/50] suction_cup                         μ=0.3175 σ=0.0365 (7m elapsed, ~1m remaining)
+[45/50] toy_tire                            μ=0.3473 σ=0.0127 (7m elapsed, ~1m remaining)
+[46/50] travel_switch                       μ=0.3137 σ=0.0057 (7m elapsed, ~1m remaining)
+[47/50] vacuum_switch                       μ=0.3177 σ=0.0092 (7m elapsed, ~0m remaining)
+[48/50] vehicle_harness_conductor           μ=0.3398 σ=0.0086 (7m elapsed, ~0m remaining)
+[49/50] vibration_motor                     μ=0.3026 σ=0.0113 (7m elapsed, ~0m remaining)
+[50/50] wireless_receiver_module            μ=0.3592 σ=0.0156 (8m elapsed, ~0m remaining)
+
+✅ scores.csv: 750 行
+
+📊 Top-5 异常分数最高类:
+  battery                                  μ=0.5591 σ=0.0803
+  lithium_battery_plug                     μ=0.4114 σ=0.0132
+  button_battery_holder                    μ=0.3796 σ=0.0137
+  PLCC_socket                              μ=0.3756 σ=0.0121
+  ingot_buckle                             μ=0.3717 σ=0.0319
+📊 Bottom-5 异常分数最低类:
+  lego_pin_connector_plate                 μ=0.2867 σ=0.0217
+  power_jack                               μ=0.2828 σ=0.0085
+  smd_receiver_module                      μ=0.2779 σ=0.0247
+  motor_plug                               μ=0.2672 σ=0.0120
+  purple_clay_pot                          μ=0.2396 σ=0.0391
+
+📦 打包 submission.zip ...
+
+✅ submission.zip (100.5 MB)
+
+⏱ 总耗时: 9.0 分钟
+📁 结果目录: /root/gpufree-data/results/ch7_submit
