@@ -138,13 +138,13 @@ for cat_idx, category in enumerate(all_categories):
         
         cat_scores.append(final_score)
         
-        # ── 保存 masks（clip 到合理范围再保存为 uint8）──
+        # ── 保存 masks（保留完整余弦距离范围）──
         mask_dir = RESULT_DIR / "masks" / category / sample_id
         mask_dir.mkdir(parents=True, exist_ok=True)
         for vid in range(5):
             m = view_maps[vid]
-            m = np.clip(m, 0, 1)  # 余弦距离范围 [0, 2]，clip 到 [0, 1]
-            mask_uint8 = (m * 255).astype(np.uint8)
+            m = np.clip(m, 0, 2)  # 余弦距离理论范围 [0, 2]，不压缩到 [0, 1]
+            mask_uint8 = (m * 127.5).astype(np.uint8)  # [0,2] → [0,255]
             Image.fromarray(mask_uint8).save(mask_dir / f"{vid}_mask.png")
         
         # ── 记录分数 ──
