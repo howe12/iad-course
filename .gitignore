@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+
+# Experiment binaries
+*.npz
+*.pth
+*.ckpt
+
+# System
+.DS_Store
+.idea/
+
+# Temp scripts
+run_ch6.py
+
+# Large results (keep only the course PNGs)
+course/ch6_results/
+
+# Feishu tokens (not in repo)
+*.token
