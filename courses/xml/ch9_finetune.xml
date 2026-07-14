@@ -1,0 +1,239 @@
+<doc>
+
+<callout emoji="🔥" background-color="rgb(255,240,235)" border-color="rgb(230,100,60)">
+  <h2>推理技巧天花板已到。下一步：训练模型。</h2>
+  <p>INP-Former 基线 46.80 分，叠加 TTA、多尺度、FeatBank 等纯推理技巧最高到 47.70 分（+0.9）。排行榜 99.82 分队伍必定训练了模型。</p>
+  <p>本章详解两阶段微调方案：Phase 1 多视角对比学习微调 Encoder，Phase 2 特征重建微调 Decoder。</p>
+</callout>
+
+<h1>🎯 学习目标</h1>
+
+<table>
+  <colgroup><col width="140"/><col width="280"/><col width="280"/></colgroup>
+  <thead><tr>
+    <th background-color="rgb(242,243,245)"><b>维度</b></th>
+    <th background-color="rgb(242,243,245)"><b>🔴 学习前</b></th>
+    <th background-color="rgb(242,243,245)"><b>🟢 学习后</b></th>
+  </tr></thead>
+  <tbody>
+    <tr><td><b>训练 vs 推理</b></td><td>"换个更好的模型就行"</td><td>理解推理技巧的天花板，知道何时必须进入训练</td></tr>
+    <tr><td><b>Encoder 微调</b></td><td>"微调就是接着训练"</td><td>理解多视角对比学习（SimCLR）的原理和策略</td></tr>
+    <tr><td><b>Decoder 微调</b></td><td>"训完 encoder 就能用"</td><td>理解 encoder-decoder 不匹配问题及特征重建训练</td></tr>
+  </tbody>
+</table>
+
+<hr/>
+
+<h1>📖 主体内容</h1>
+
+<h2>9.1 为什么推理技巧不够了？</h2>
+
+<table>
+  <colgroup><col width="130"/><col width="180"/><col width="180"/><col width="180"/></colgroup>
+  <thead><tr>
+    <th background-color="rgb(242,243,245)"><b>技巧</b></th>
+    <th background-color="rgb(242,243,245)"><b>原理</b></th>
+    <th background-color="rgb(242,243,245)"><b>A 榜分数</b></th>
+    <th background-color="rgb(242,243,245)"><b>提升</b></th>
+  </tr></thead>
+  <tbody>
+    <tr><td><b>INP-Former 基线</b></td><td>原始模型直接推理</td><td>46.80</td><td>—</td></tr>
+    <tr><td><b>TTA (Test-Time Aug)</b></td><td>多方向 flip 取平均</td><td>45.49</td><td>-1.31</td></tr>
+    <tr><td><b>FeatBank (DINOv2)</b></td><td>正常样本 patch 最近邻</td><td>47.70</td><td>+0.90</td></tr>
+  </tbody>
+</table>
+
+<p><b>结论：</b>所有纯推理技巧叠加，最大提升 &lt; 2 分。核心问题出在特征层面——DINOv2 学的是 ImageNet 通用特征，不是工业缺陷特征。</p>
+
+<p><b>评分公式</b>提醒：S = 0.3×S_cls + 0.7×S_seg。定位（S_seg）占 70%，而定位恰恰依赖 encoder 提取的 patch 特征质量。</p>
+
+<h2>9.2 Encoder 微调：多视角对比学习</h2>
+
+<h3>9.2.1 为什么用多视角？</h3>
+
+<p>每类产品有 5 个视角（0.png~4.png），这是天然的对比学习优势：</p>
+
+<table>
+  <colgroup><col width="200"/><col width="450"/></colgroup>
+  <thead><tr>
+    <th background-color="rgb(242,243,245)"><b>样本对类型</b></th>
+    <th background-color="rgb(242,243,245)"><b>训练目标</b></th>
+  </tr></thead>
+  <tbody>
+    <tr><td><b>正样本对</b>：S0001/0.png ↔ S0001/1.png</td><td>同一产品的不同视角 → 特征应该<b>相似</b></td></tr>
+    <tr><td><b>负样本对</b>：S0001/0.png ↔ S0002/0.png</td><td>不同产品 → 特征应该<b>不同</b></td></tr>
+  </tbody>
+</table>
+
+<callout emoji="💡" background-color="rgb(235,245,255)" border-color="rgb(80,150,230)">
+  <p><b>直觉：</b>让 encoder 学会"不管从哪个角度看，这是同一个产品"——这种视角不变性恰好是异常检测需要的能力。</p>
+</callout>
+
+<h3>9.2.2 训练配置</h3>
+
+<table>
+  <colgroup><col width="180"/><col width="480"/></colgroup>
+  <tbody>
+    <tr><td><b>损失函数</b></td><td>InfoNCE（SimCLR 对比损失），温度 τ=0.07</td></tr>
+    <tr><td><b>数据量</b></td><td>50 类 × 20 样本 × 5 视角 = <b>5,000 张正常图</b>（无缺陷标注）</td></tr>
+    <tr><td><b>Batch Size</b></td><td>16（8 对正样本 vs 30 个负样本）</td></tr>
+    <tr><td><b>冻结策略</b></td><td>Blocks 0-9 🔒 冻结，Blocks 10-11 🔓 训练（<b>14M/86M 参数，16%</b>）</td></tr>
+    <tr><td><b>学习率</b></td><td>1e-4，AdamW，weight_decay=1e-4</td></tr>
+    <tr><td><b>Epochs</b></td><td>20，总 1,240 steps，约 14 分钟（4090）</td></tr>
+  </tbody>
+</table>
+
+<h3>9.2.3 训练曲线</h3>
+
+<table>
+  <colgroup><col width="100"/><col width="120"/><col width="120"/></colgroup>
+  <thead><tr>
+    <th background-color="rgb(242,243,245)"><b>Epoch</b></th>
+    <th background-color="rgb(242,243,245)"><b>Loss</b></th>
+    <th background-color="rgb(242,243,245)"><b>Acc</b></th>
+  </tr></thead>
+  <tbody>
+    <tr><td>1</td><td>0.739</td><td>76.3%</td></tr>
+    <tr><td>5</td><td>0.301</td><td>83.5%</td></tr>
+    <tr><td>10</td><td>0.279</td><td>84.5%</td></tr>
+    <tr><td>15</td><td>0.244</td><td>87.9%</td></tr>
+    <tr><td><b>18 ★</b></td><td><b>0.230</b></td><td><b>88.0%</b></td></tr>
+    <tr><td>20</td><td>0.277</td><td>86.8%</td></tr>
+  </tbody>
+</table>
+
+<p>Epoch 18 是最优点，之后 loss 反弹说明开始<b>过拟合</b>。0.230 意味着模型在 31 个候选（30 负+1 正）中正确识别正样本对的概率约 88%。</p>
+
+<callout emoji="⚠️" background-color="rgb(255,245,235)" border-color="rgb(250,150,80)">
+  <p><b>陷阱：</b>不要追求 loss→0。对比学习 loss 0.03 意味着 97% 正确率，但会让 encoder 过拟合训练视角，丢失对细微异常纹理的敏感度。0.10~0.25 是最优区间。</p>
+</callout>
+
+<h3>9.2.4 只微调 Encoder 的问题</h3>
+
+<p>推理结果：<b>分数没有变化。</b>原因：</p>
+
+<table>
+  <colgroup><col width="200"/><col width="460"/></colgroup>
+  <tbody>
+    <tr><td><b>Encoder（已微调）</b></td><td>输出新的特征分布</td></tr>
+    <tr><td><b>Decoder（未微调）</b></td><td>还在等原始 DINOv2 的特征分布</td></tr>
+    <tr><td><b>结果</b></td><td>Decoder 强行把新特征掰回旧分布 → 等于白训</td></tr>
+  </tbody>
+</table>
+
+<h2>9.3 Decoder 微调：正常特征重建</h2>
+
+<h3>9.3.1 Encoder 和 Decoder 的职责</h3>
+
+<table>
+  <colgroup><col width="120"/><col width="250"/><col width="280"/></colgroup>
+  <thead><tr>
+    <th background-color="rgb(242,243,245)"></th>
+    <th background-color="rgb(242,243,245)"><b>Encoder（眼睛）</b></th>
+    <th background-color="rgb(242,243,245)"><b>Decoder（大脑）</b></th>
+  </tr></thead>
+  <tbody>
+    <tr><td><b>做什么</b></td><td>把图片转成特征向量</td><td>根据特征重建"正常版本"</td></tr>
+    <tr><td><b>比喻</b></td><td>安检员的眼睛——看到什么</td><td>安检员的大脑——应该是什么</td></tr>
+    <tr><td><b>异常检测</b></td><td>Encoder(en) vs Decoder(de) 的差异 → 异常</td><td></td></tr>
+  </tbody>
+</table>
+
+<p><b>异常检测公式：</b>anomaly_map = |Encoder(图片) - Decoder(Encoder(图片))|</p>
+
+<p>Decoder 本质是"正常特征预测器"——它只学过正常产品的特征分布。看到缺陷时，Decoder 无法正确重建 → 差异大 → 检测到异常。</p>
+
+<h3>9.3.2 训练配置</h3>
+
+<table>
+  <colgroup><col width="180"/><col width="480"/></colgroup>
+  <tbody>
+    <tr><td><b>损失函数</b></td><td>MSE(en, de) —— 让 Decoder 学会完美重建正常特征</td></tr>
+    <tr><td><b>冻结策略</b></td><td>Encoder 🔒 冻结（保留微调后的权重），Decoder 🔓 全部训练</td></tr>
+    <tr><td><b>训练参数</b></td><td>Bottleneck + Aggregation + 8×Decoder + 6 个 Prototype Tokens（~25M 参数）</td></tr>
+    <tr><td><b>学习率</b></td><td>1e-4，CosineAnnealing 衰减到 1e-6</td></tr>
+    <tr><td><b>Epochs</b></td><td>30，1250 batch/epoch，约 58 分钟（4090）</td></tr>
+  </tbody>
+</table>
+
+<h3>9.3.3 训练曲线</h3>
+
+<table>
+  <colgroup><col width="100"/><col width="130"/><col width="130"/></colgroup>
+  <thead><tr>
+    <th background-color="rgb(242,243,245)"><b>Epoch</b></th>
+    <th background-color="rgb(242,243,245)"><b>Total Loss</b></th>
+    <th background-color="rgb(242,243,245)"><b>Recon Loss</b></th>
+  </tr></thead>
+  <tbody>
+    <tr><td>1</td><td>0.099</td><td>0.039</td></tr>
+    <tr><td>5</td><td>0.078</td><td>0.027</td></tr>
+    <tr><td>10</td><td>0.077</td><td>0.025</td></tr>
+    <tr><td>20</td><td>0.074</td><td>0.024</td></tr>
+    <tr><td><b>30 ★</b></td><td><b>0.073</b></td><td><b>0.022~0.030</b></td></tr>
+  </tbody>
+</table>
+
+<p>recon_loss 从 0.039 降到 0.025（<b>-36%</b>），10 epoch 后进入平台期。Decoder 学会了重建 97%+ 的正常特征差异。</p>
+
+<h3>9.3.4 效果对比</h3>
+
+<p><b>推理时正常产品 anomaly score 大幅下降：</b></p>
+
+<table>
+  <colgroup><col width="160"/><col width="120"/><col width="120"/><col width="100"/></colgroup>
+  <thead><tr>
+    <th background-color="rgb(242,243,245)"><b>类别</b></th>
+    <th background-color="rgb(242,243,245)"><b>仅微调 Encoder</b></th>
+    <th background-color="rgb(242,243,245)"><b>Encoder+Decoder</b></th>
+    <th background-color="rgb(242,243,245)"><b>降幅</b></th>
+  </tr></thead>
+  <tbody>
+    <tr><td>3_adapter</td><td>0.316</td><td><b>0.186</b></td><td>-41%</td></tr>
+    <tr><td>DVD_switch</td><td>0.306</td><td><b>0.183</b></td><td>-40%</td></tr>
+    <tr><td>D_sub_connector</td><td>0.325</td><td><b>0.212</b></td><td>-35%</td></tr>
+    <tr><td>PLCC_socket</td><td>0.376</td><td><b>0.194</b></td><td>-48%</td></tr>
+  </tbody>
+</table>
+
+<p>正常样本分数被压低 35~48%，意味着<b>正常和异常的分离度增大</b>——这正是异常检测的核心目标。</p>
+
+<h2>9.4 完整训练流水线总结</h2>
+
+<callout emoji="🏗️" background-color="rgb(235,255,240)" border-color="rgb(80,200,100)">
+  <h3>两阶段微调架构</h3>
+  <p><b>Phase 1 — Encoder 微调（14 分钟）</b></p>
+  <p>方法：多视角对比学习（InfoNCE） | 训练：最后 2 层 ViT Block | 数据：5000 张正常图</p>
+  <p><b>Phase 2 — Decoder 微调（58 分钟）</b></p>
+  <p>方法：正常特征重建（MSE） | 训练：全部 Decoder + Bottleneck | 数据：5000 张正常图</p>
+  <p><b>关键：全程不需要缺陷标注。</b>仅靠正常样本即可完成全部训练。</p>
+</callout>
+
+<h2>9.5 后续优化方向</h2>
+
+<table>
+  <colgroup><col width="200"/><col width="460"/></colgroup>
+  <tbody>
+    <tr><td><b>大 Batch 对比</b></td><td>batch 16→48，负样本 30→94，对比难度 3 倍</td></tr>
+    <tr><td><b>MoCo 记忆库</b></td><td>维护 4096 个负样本队列，SimCLR→MoCo v2</td></tr>
+    <tr><td><b>渐进解冻</b></td><td>逐步解冻更多 encoder 层，让特征变化更平滑</td></tr>
+  </tbody>
+</table>
+
+<hr/>
+
+<h2>🔑 关键实验记录</h2>
+
+<table>
+  <colgroup><col width="180"/><col width="480"/></colgroup>
+  <tbody>
+    <tr><td><b>容器</b></td><td>SSH -p 30426 root@183.147.142.40，RTX 4090 24GB</td></tr>
+    <tr><td><b>初始权重</b></td><td>INP-Former-Super-Multi-Class (592MB) + DINOv2 ViT-B/14 (331MB)</td></tr>
+    <tr><td><b>Phase 1 结果</b></td><td>best_model.pth (336MB), epoch 18, loss=0.2296</td></tr>
+    <tr><td><b>Phase 2 结果</b></td><td>best_decoder.pth, epoch 30, loss=0.0734</td></tr>
+    <tr><td><b>关键教训</b></td><td>只微调 encoder 不微调 decoder = 白训。decoder 不认识新特征分布。</td></tr>
+    <tr><td><b>对比学习 loss</b></td><td>不要追 0.03。0.10~0.25 是异常检测最优区间，避免过拟合。</td></tr>
+  </tbody>
+</table>
+
+</doc>
