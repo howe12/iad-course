@@ -6,76 +6,155 @@
   <p>这不只是数据问题，这是一个<b>范式问题</b>。本章带你从零开始面对这堆只有正常样本的数据。</p>
 </callout>
 
-<h1>🗺️ 竞赛全景：一图看懂你在搭什么</h1>
-
-<callout emoji="🔑" background-color="rgb(240,251,239)" border-color="rgb(142,224,133)">
-  <p><b>核心认知：</b>这章不写代码——这章画地图。后面每一章你都会知道"我正在搭 7 块中的哪一块"。</p>
+<callout emoji="📋" background-color="rgb(240,244,255)" border-color="rgb(130,167,252)">
+  <p><b>🔄 Ch0 回顾：</b>竞赛全景地图（流水线、章节分工、预训练模型角色、评分公式）已放在 <b>Ch0：读懂比赛</b>。没看过的先回去看——不然不知道本章在搭哪块。</p>
 </callout>
 
-<p>输入：1 张 448×448 的零件照片（5 视角中的 1 个，共 50 类零件）</p>
+<h1>📚 前置认知</h1>
 
-<pre caption="流水线全景"><code>
-[DINOv2 编码器] → 把图片压缩成 768 维特征向量
-       ↓
-[INP-Former 解码器] → 跟 6 个「正常原型」逐像素比较
-       ↓
-输出：448×448 异常热力图
-       ↓
-取最异常像素的均值 → anomaly_score + 5视角 Max 融合
-       ↓
-打包 submission.zip → 提交平台 → 三合一评分
-S = 100 × (0.3×分类AUROC + 0.5×分割AUROC + 0.2×零样本)
+<callout emoji="💡" background-color="rgb(240,251,239)" border-color="rgb(142,224,133)">
+  <p><b>本章目标：</b>把数据跑起来。不需要 GPU 小时数，不需要训练循环——整个脚本跑完 50 个类别只花了 <b>6 分 42 秒</b>。但就是这 6 分钟产出的数字，会贯穿后面 8 章——它是你的第一个基线。</p>
+</callout>
+
+<hr/>
+
+<h1>🛠️ 0. 环境搭建</h1>
+
+<callout emoji="⚠️" background-color="rgb(255,248,230)" border-color="rgb(250,200,120)">
+  <p><b>先确认硬件：</b>比赛要求单卡 RTX 4090（24 GB）。如果你用的是云 GPU 容器，确认 GPU 已分配后再继续。</p>
+</callout>
+
+<h2>验证 GPU</h2>
+
+<pre lang="bash" caption="检查 GPU 是否可用"><code>
+nvidia-smi  # 应该看到 RTX 4090, 24 GB
+python3 -c "import torch; print(torch.cuda.is_available())"  # True
 </code></pre>
 
+<h2>创建 conda 环境</h2>
+
+<pre lang="bash" caption="环境搭建（新建容器时执行一次）"><code>
+# 1. 安装 Miniconda（装到数据卷，避免撑爆系统盘）
+wget https://repo.anaconda.com/miniconda/Miniconda3-py310_25.1.1-2-Linux-x86_64.sh
+bash Miniconda3-py310_25.1.1-2-Linux-x86_64.sh -b -p /root/gpufree-data/miniconda3
+
+# 2. 创建环境
+/root/gpufree-data/miniconda3/bin/conda create -n comp python=3.10 -y
+
+# 3. 安装 PyTorch（CUDA 11.8）
+/root/gpufree-data/miniconda3/envs/comp/bin/pip install \
+    torch==2.0.0+cu118 torchvision==0.15.1+cu118 \
+    --find-links https://download.pytorch.org/whl/torch_stable.html
+
+# 4. 安装基础依赖
+/root/gpufree-data/miniconda3/envs/comp/bin/pip install \
+    numpy opencv-python-headless Pillow scipy tqdm
+</code></pre>
+
+<callout emoji="📋" background-color="rgb(240,244,255)" border-color="rgb(130,167,252)">
+  <p><b>国内加速（可选）：</b></p>
+  <pre lang="bash"><code>
+pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple
+  </code></pre>
+</callout>
+
+<h2>关键文件路径规划</h2>
+
 <table>
-  <colgroup><col width="80"/><col width="280"/><col width="280"/></colgroup>
+  <colgroup><col width="280"/><col width="380"/></colgroup>
   <thead><tr>
-    <th background-color="rgb(242,243,245)"><b>章节</b></th>
-    <th background-color="rgb(242,243,245)"><b>搭的是流水线的哪块</b></th>
-    <th background-color="rgb(242,243,245)"><b>核心问题</b></th>
+    <th background-color="rgb(242,243,245)"><b>路径</b></th>
+    <th background-color="rgb(242,243,245)"><b>用途</b></th>
   </tr></thead>
   <tbody>
-    <tr><td><b>Ch1</b></td><td>数据加载 + 全局特征提取</td><td>这些零件长什么样？</td></tr>
-    <tr><td><b>Ch2</b></td><td>像素级热力图</td><td>异常在哪，不只是"有没有"</td></tr>
-    <tr><td><b>Ch3</b></td><td>DINOv2 为什么能区分 50 类</td><td>自监督训练原理</td></tr>
-    <tr><td><b>Ch4</b></td><td>INP-Former 怎么学"正常长什么样"</td><td>可学习原型</td></tr>
-    <tr><td><b>Ch5</b></td><td>热力图 → 比赛分数</td><td>AUROC/AP/F1 怎么算</td></tr>
-    <tr><td><b>Ch6</b></td><td>5 个视角怎么合</td><td>低相关性视角的 Max 最优</td></tr>
-    <tr><td><b>Ch7</b></td><td>全部串起来提交</td><td>第一次真实排名</td></tr>
+    <tr><td><code>/root/gpufree-data/datasets/</code></td><td>数据集（Train.zip + Test_A.zip 解压后）</td></tr>
+    <tr><td><code>/root/gpufree-data/code/</code></td><td>INP-Former 源码 + 官方权重</td></tr>
+    <tr><td><code>/root/gpufree-data/results/</code></td><td>所有实验结果、submission.zip</td></tr>
+    <tr><td><code>/root/gpufree-data/miniconda3/</code></td><td>conda 环境（不要装到系统盘）</td></tr>
   </tbody>
 </table>
 
-<h2>预训练模型分工</h2>
+<callout emoji="⚠️" background-color="rgb(255,248,230)" border-color="rgb(250,200,120)">
+  <p><b>注意：</b>云容器系统盘（/）通常只有 30 GB。数据集（7.2 GB）+ 模型权重（~1 GB）+ conda 环境（~5 GB）必须放数据卷（/root/gpufree-data），否则盘满。</p>
+</callout>
+
+<hr/>
+
+<h1>📦 1. 数据集下载</h1>
 
 <callout emoji="📋" background-color="rgb(240,244,255)" border-color="rgb(130,167,252)">
-  <p>往后 8 章你反复用到两个东西，先搞清它们的分工：</p>
+  <p>数据集来自天池平台，通过阿里云 OSS 分发。需要 STS 临时凭证（1 小时有效）。</p>
 </callout>
 
-<p><b>👁️ DINOv2 — 通用的「眼睛」（你不动它）</b></p>
-<ul>
-  <li>在 1.42 亿张自然图片上训练过，冻结，只做前向推理</li>
-  <li>输入一张零件照片 → 输出 768 维特征向量 + 内部多层特征图</li>
-  <li>它不认识"电容"还是"电阻"，但它知道"纹理、边缘、形状"这些底层视觉概念</li>
-  <li>类比：一个没学过中文的外国人，能一眼看出招牌歪了——因为"歪"是跨语言的视觉概念</li>
-</ul>
+<h2>下载清单</h2>
 
-<p><b>🧠 INP-Former — 给眼睛装上「这个零件应该长什么样」的记忆（你加载官方权重）</b></p>
-<ul>
-  <li>在 DINOv2 之上加了 6 个可学习的 INP token（正常原型）和 8 层解码器</li>
-  <li>训练时它看了 50 类 × 20 张正常照片，学会了每类零件的"正常纹理范围"</li>
-  <li>推理时，新图片的特征跟 6 个原型比较——差距大的像素就是异常</li>
-  <li>类比：DINOv2 只能说"这个区域不太对"，INP-Former 能说"这个连接器的 3 号针脚比正常原型偏了 0.3mm"</li>
-</ul>
+<table>
+  <colgroup><col width="200"/><col width="100"/><col width="360"/></colgroup>
+  <thead><tr>
+    <th background-color="rgb(242,243,245)"><b>文件</b></th>
+    <th background-color="rgb(242,243,245)"><b>大小</b></th>
+    <th background-color="rgb(242,243,245)"><b>说明</b></th>
+  </tr></thead>
+  <tbody>
+    <tr><td><b>Train.zip</b></td><td>~7 GB</td><td>50 类 × 20 样本 × 5 视角正常图片</td></tr>
+    <tr><td><b>Test_A.zip</b></td><td>~5 GB</td><td>50 类 × 15 样本 × 5 视角测试图片（无标签）</td></tr>
+  </tbody>
+</table>
 
-<h2>⚖️ 评分公式</h2>
+<h2>下载方式</h2>
+
+<p>天池平台提供两种方式：</p>
+
+<ol>
+  <li><b>🔗 官网直链下载：</b>登录天池 → 比赛页面 → 数据集 → 复制下载链接，在容器里 <code>wget</code></li>
+  <li><b>☁️ OSS SDK 下载：</b>用 STS 临时凭证走 Python oss2 SDK（适合脚本化）</li>
+</ol>
+
+<pre lang="bash" caption="方式1：最简单——直链下载"><code>
+# 在容器上执行
+cd /root/gpufree-data/datasets/
+# 复制天池页面的下载链接（需登录获取）
+wget -O Train.zip "https://tianchi-competition.oss-cn-shanghai.aliyuncs.com/..." 
+wget -O Test_A.zip "https://tianchi-competition.oss-cn-shanghai.aliyuncs.com/..."
+
+# 解压
+unzip Train.zip -d train/
+unzip Test_A.zip -d Test_A/
+</code></pre>
+
+<pre lang="python" caption="方式2：Python oss2 脚本下载（需 STS Token）"><code>
+import oss2
+
+# 从天池平台获取 ak, sk, token（1小时有效）
+auth = oss2.StsAuth(ak, sk, token)
+bucket = oss2.Bucket(auth, "oss-cn-shanghai.aliyuncs.com", "tianchi-race-prod-sh")
+
+# 断点续传下载
+oss2.resumable_download(bucket, "Train.zip", "/root/gpufree-data/datasets/Train.zip",
+    multiget_threshold=10485760, part_size=10485760, num_threads=4)
+</code></pre>
 
 <callout emoji="⚠️" background-color="rgb(255,248,230)" border-color="rgb(250,200,120)">
-  <p><b>注意：</b>A 榜实际权重为 <b>0.3×分类 + 0.7×分割</b>（零样本 0.2 并入分割）。分割占 70%——mask 质量决定一切。</p>
+  <p><b>常见问题：</b>OSS Token 报 InvalidSecurityToken——即使刚生成。如果 2 次都失败，不要重试。改为：本地下载 → scp 上传到容器。</p>
 </callout>
 
-<latex>S_{A} = 100 \times (0.3 \times S_{cls} + 0.7 \times S_{seg})</latex>
+<pre lang="bash" caption="备选方案：本地下载 → scp 上传"><code>
+# 在你的本地机器上
+wget "https://..." -O Train.zip
+scp -P 30426 Train.zip root@183.147.142.40:/root/gpufree-data/datasets/
+</code></pre>
 
-<p>其中 <latex>S_{seg} = \frac{P\text{-}AUROC + P\text{-}AP + P\text{-}F1_{max}}{3}</latex></p>
+<h2>验证数据集完整性</h2>
+
+<pre lang="bash" caption="确认下载成功"><code>
+cd /root/gpufree-data/datasets/
+ls train/ | wc -l     # 应该输出 50（50个类别目录）
+ls Test_A/ | wc -l   # 应该输出 50
+
+# 抽查一个类别
+ls train/battery/ | wc -l       # 应该输出 20（20个样本）
+ls train/battery/S0001/         # 应该看到 0.png 1.png 2.png 3.png 4.png
+</code></pre>
 
 <hr/>
 
