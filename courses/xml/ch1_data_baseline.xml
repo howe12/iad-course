@@ -1,0 +1,241 @@
+<doc>
+
+<callout emoji="❓" background-color="rgb(255,245,235)" border-color="rgb(250,150,80)">
+  <h2>如果你是一台机器，你怎么判断零件坏了？</h2>
+  <p>你拿到了50个类别的训练集，每个类别20个样本，每个样本5个视角——但<b>所有训练图片都是正常的。</b>没有一张有缺陷。没有标签，没有 y。你只能学会"正常长什么样"，然后问"这个样本和正常差多少"。</p>
+  <p>这不只是数据问题，这是一个<b>范式问题</b>。本章带你从零开始面对这堆只有正常样本的数据。</p>
+</callout>
+
+<h1>🗺️ 竞赛全景：一图看懂你在搭什么</h1>
+
+<callout emoji="🔑" background-color="rgb(240,251,239)" border-color="rgb(142,224,133)">
+  <p><b>核心认知：</b>这章不写代码——这章画地图。后面每一章你都会知道"我正在搭 7 块中的哪一块"。</p>
+</callout>
+
+<p>输入：1 张 448×448 的零件照片（5 视角中的 1 个，共 50 类零件）</p>
+
+<pre caption="流水线全景"><code>
+[DINOv2 编码器] → 把图片压缩成 768 维特征向量
+       ↓
+[INP-Former 解码器] → 跟 6 个「正常原型」逐像素比较
+       ↓
+输出：448×448 异常热力图
+       ↓
+取最异常像素的均值 → anomaly_score + 5视角 Max 融合
+       ↓
+打包 submission.zip → 提交平台 → 三合一评分
+S = 100 × (0.3×分类AUROC + 0.5×分割AUROC + 0.2×零样本)
+</code></pre>
+
+<table>
+  <colgroup><col width="80"/><col width="280"/><col width="280"/></colgroup>
+  <thead><tr>
+    <th background-color="rgb(242,243,245)"><b>章节</b></th>
+    <th background-color="rgb(242,243,245)"><b>搭的是流水线的哪块</b></th>
+    <th background-color="rgb(242,243,245)"><b>核心问题</b></th>
+  </tr></thead>
+  <tbody>
+    <tr><td><b>Ch1</b></td><td>数据加载 + 全局特征提取</td><td>这些零件长什么样？</td></tr>
+    <tr><td><b>Ch2</b></td><td>像素级热力图</td><td>异常在哪，不只是"有没有"</td></tr>
+    <tr><td><b>Ch3</b></td><td>DINOv2 为什么能区分 50 类</td><td>自监督训练原理</td></tr>
+    <tr><td><b>Ch4</b></td><td>INP-Former 怎么学"正常长什么样"</td><td>可学习原型</td></tr>
+    <tr><td><b>Ch5</b></td><td>热力图 → 比赛分数</td><td>AUROC/AP/F1 怎么算</td></tr>
+    <tr><td><b>Ch6</b></td><td>5 个视角怎么合</td><td>低相关性视角的 Max 最优</td></tr>
+    <tr><td><b>Ch7</b></td><td>全部串起来提交</td><td>第一次真实排名</td></tr>
+  </tbody>
+</table>
+
+<h2>预训练模型分工</h2>
+
+<callout emoji="📋" background-color="rgb(240,244,255)" border-color="rgb(130,167,252)">
+  <p>往后 8 章你反复用到两个东西，先搞清它们的分工：</p>
+</callout>
+
+<p><b>👁️ DINOv2 — 通用的「眼睛」（你不动它）</b></p>
+<ul>
+  <li>在 1.42 亿张自然图片上训练过，冻结，只做前向推理</li>
+  <li>输入一张零件照片 → 输出 768 维特征向量 + 内部多层特征图</li>
+  <li>它不认识"电容"还是"电阻"，但它知道"纹理、边缘、形状"这些底层视觉概念</li>
+  <li>类比：一个没学过中文的外国人，能一眼看出招牌歪了——因为"歪"是跨语言的视觉概念</li>
+</ul>
+
+<p><b>🧠 INP-Former — 给眼睛装上「这个零件应该长什么样」的记忆（你加载官方权重）</b></p>
+<ul>
+  <li>在 DINOv2 之上加了 6 个可学习的 INP token（正常原型）和 8 层解码器</li>
+  <li>训练时它看了 50 类 × 20 张正常照片，学会了每类零件的"正常纹理范围"</li>
+  <li>推理时，新图片的特征跟 6 个原型比较——差距大的像素就是异常</li>
+  <li>类比：DINOv2 只能说"这个区域不太对"，INP-Former 能说"这个连接器的 3 号针脚比正常原型偏了 0.3mm"</li>
+</ul>
+
+<h2>⚖️ 评分公式</h2>
+
+<callout emoji="⚠️" background-color="rgb(255,248,230)" border-color="rgb(250,200,120)">
+  <p><b>注意：</b>A 榜实际权重为 <b>0.3×分类 + 0.7×分割</b>（零样本 0.2 并入分割）。分割占 70%——mask 质量决定一切。</p>
+</callout>
+
+<latex>S_{A} = 100 \times (0.3 \times S_{cls} + 0.7 \times S_{seg})</latex>
+
+<p>其中 <latex>S_{seg} = \frac{P\text{-}AUROC + P\text{-}AP + P\text{-}F1_{max}}{3}</latex></p>
+
+<hr/>
+
+<h1>📖 主体内容</h1>
+
+<h2>1.1 数据集结构：先搞清楚你手上有多少东西</h2>
+
+<pre caption="数据集目录结构"><code>
+train/
+  3_adapter/
+    S0001/  0.png  1.png  2.png  3.png  4.png   ← 5个视角
+    S0002/  ...
+    S0020/  ← 20个正常样本
+  ...  ← 共50个类别
+Test_A/
+  3_adapter/
+    S0001~S0015/  ← 15个测试样本（A榜无标签）
+</code></pre>
+
+<table>
+  <colgroup><col width="180"/><col width="300"/></colgroup>
+  <thead><tr>
+    <th background-color="rgb(242,243,245)"><b>指标</b></th>
+    <th background-color="rgb(242,243,245)"><b>数值</b></th>
+  </tr></thead>
+  <tbody>
+    <tr><td>训练集</td><td><b>50类 × 20样本 × 5视角 = 5,000张</b>，7.2 GB</td></tr>
+    <tr><td>测试集</td><td><b>50类 × 15样本 × 5视角 = 3,750张</b>，5.4 GB</td></tr>
+    <tr><td>图片尺寸</td><td>398×398 ~ 4,343×4,343（11倍差异！）</td></tr>
+  </tbody>
+</table>
+
+<callout emoji="🔑" background-color="rgb(240,251,239)" border-color="rgb(142,224,133)">
+  <p><b>关键洞察：</b>同一类别内的20个样本之间的差异就很大。比如 3_adapter 的 S0001 和 S0020，同一个产品不同批次、不同光照条件，外观差异可能比跨类别的差异还大。</p>
+</callout>
+
+<h2>1.2 五视角对比：换个角度，同一个产品像换了张脸</h2>
+
+<p>同一行的5张图来自<b>同一个样本的5个不同角度</b>（见文末 图1.2）。</p>
+
+<p>三个规律：</p>
+<ol>
+  <li><b>V0（正上方）和 V4（斜上方）的光照完全不同</b> — 光线方向一变，同一条纹理的"亮度"就变了</li>
+  <li><b>金属零件在 V1 角度反光最严重，V2 角度最暗</b> — 反光不是缺陷，是物理规律</li>
+  <li><b>塑料件在不同角度下注塑纹理方向不同</b> — 纹理方向是制造工艺决定的</li>
+</ol>
+
+<callout emoji="💡" background-color="rgb(240,251,239)" border-color="rgb(142,224,133)">
+  <p><b>核心教训：</b>如果你单独看视角 1 就下结论，可能把正常的光影变化当成缺陷。多视角信息是双刃剑——多了信息，也多了混淆。</p>
+</callout>
+
+<h2>1.3 图片尺寸：为什么需要 Crop + Resize</h2>
+
+<p>50个类别的原始图片尺寸横跨 398px ~ 4343px，11倍差异（见文末 图1.3）。</p>
+
+<callout emoji="⚠️" background-color="rgb(255,248,230)" border-color="rgb(250,200,120)">
+  <p><b>极端例子：</b>effect_transistor (398×398) vs circuit_breaker (4,343×4,343) — 直接缩到 448px 会把一根头发丝粗细的划痕压成 1 像素。</p>
+</callout>
+
+<pre caption="预处理流水线"><code>
+原图 (398~4343px)
+  → Resize(448, 448)   — 第一步缩放到统一尺寸
+  → CenterCrop(392)    — 裁掉最外围的 28 像素（背景/边缘）
+  → Resize(448, 448)   — 恢复到标准输入尺寸
+  → Normalize(ImageNet 均值/标准差)
+</code></pre>
+
+<h2>1.4 最简基线：DINOv2 + 余弦距离</h2>
+
+<p>不带 INP-Former，不训练。只用一个预训练的 DINOv2 Base 编码器。<b>3步，无训练，6分钟跑完 50 类。</b></p>
+
+<pre lang="python" caption="核心代码 — DINOv2 + 余弦距离基线"><code>
+encoder = vit_encoder.load("dinov2reg_vit_base_14").to("cuda")
+
+# 提取所有正常样本的特征
+with torch.no_grad():
+    for imgs in train_dataloader:
+        feats = encoder(imgs)  # [B, 768]
+        train_features.append(feats)
+
+# 正常原型 = 所有正常样本特征的均值
+proto = torch.cat(train_features).mean(dim=0)
+
+# 对测试样本计算异常分数
+for imgs in test_dataloader:
+    feats = encoder(imgs)
+    cos_sim = F.cosine_similarity(feats, proto.expand(B, -1), dim=1)
+    anomaly_score = 1 - cos_sim  # 越接近1 = 越异常
+</code></pre>
+
+<h2>1.5 50类基线结果</h2>
+
+<p>全量50类推理耗时 <b>6分42秒</b>（RTX 4090）。分数范围 0.044 ~ 0.202，均值 0.133。</p>
+
+<table>
+  <colgroup><col width="250"/><col width="100"/><col width="350"/></colgroup>
+  <thead><tr>
+    <th background-color="rgb(242,243,245)"><b>类别</b></th>
+    <th background-color="rgb(242,243,245)"><b>分数</b></th>
+    <th background-color="rgb(242,243,245)"><b>原因</b></th>
+  </tr></thead>
+  <tbody>
+    <tr><td bg-color="var(--red-light)">connector_housing_female</td><td>0.202</td><td>塑料壳体注塑工艺，不同批次表面纹理差异大</td></tr>
+    <tr><td>motor_gear_reducer</td><td>0.196</td><td>金属齿轮+润滑油，反光和油渍分布不均匀</td></tr>
+    <tr><td>silicon_cell_sensor</td><td>0.192</td><td>硅片表面光洁度受温度/湿度影响</td></tr>
+    <tr><td>laser_diode</td><td>0.190</td><td>高精密光学组件，镜头镀膜反光</td></tr>
+    <tr><td>motor_plug</td><td>0.189</td><td>多电线+绝缘套，颜色组合多变</td></tr>
+    <tr><td bg-color="var(--green-light)">wireless_receiver_module</td><td>0.044</td><td>小型PCB模块，贴片工艺标准化</td></tr>
+    <tr><td>effect_transistor</td><td>0.065</td><td>封装芯片，外观几乎完全一致</td></tr>
+    <tr><td>self_lock_switch</td><td>0.075</td><td>简单机械开关，模压成型</td></tr>
+  </tbody>
+</table>
+
+<callout emoji="🔑" background-color="rgb(240,251,239)" border-color="rgb(142,224,133)">
+  <p><b>核心发现：</b>connector_housing_female 的正常样本就比 wireless_receiver_module 的正常样本"更不像自己"。如果你用固定阈值 0.15 判断，塑料壳的正常品会被批量错判为异常——这就是<b>统一阈值不可行</b>的根本原因。</p>
+</callout>
+
+<hr/>
+
+<h1>🎯 学习目标</h1>
+
+<table>
+  <colgroup><col width="150"/><col width="280"/><col width="280"/></colgroup>
+  <thead><tr>
+    <th background-color="rgb(242,243,245)"><b>维度</b></th>
+    <th background-color="rgb(242,243,245)"><b>🔴 学习前</b></th>
+    <th background-color="rgb(242,243,245)"><b>🟢 学习后</b></th>
+  </tr></thead>
+  <tbody>
+    <tr><td><b>认知定位</b></td><td>"异常检测就是二分类"</td><td>理解单类分类——训练集全是正常样本，无监督地发现异常</td></tr>
+    <tr><td><b>图片尺寸</b></td><td>不知道不同产品图片尺寸差异这么大</td><td>知道为什么需要 CenterCrop + Resize 统一预处理</td></tr>
+    <tr><td><b>多视角数据</b></td><td>"5个视角只是换个角度拍照"</td><td>理解同产品不同视角在光照、纹理上差异巨大</td></tr>
+    <tr><td><b>基线方法论</b></td><td>没有基线，不知道什么分数算"好"</td><td>用 DINOv2 + 余弦距离跑出全量50类分数</td></tr>
+  </tbody>
+</table>
+
+<hr/>
+
+<h1>🔬 检查清单</h1>
+
+<ul>
+  <li>训练集有多少张图片？→ <b>5,000张</b>，全是正常样本</li>
+  <li>图片尺寸统一吗？→ <b>不统一</b>，最小398px，最大4343px（11倍差异）</li>
+  <li>768维向量是什么？→ DINOv2 对整张图的全局特征描述</li>
+  <li>余弦距离和欧氏距离的区别？→ 余弦只看方向（纹理），欧氏还看长度（亮度）</li>
+  <li>最简基线费时？→ <b>6分42秒</b>（RTX 4090，50类全量）</li>
+  <li>最高和最低分类差多少？→ <b>4.6倍</b>（0.202 vs 0.044），统一阈值不可行</li>
+</ul>
+
+<hr/>
+
+<h1>❓ 新问题</h1>
+
+<p>DINOv2 给了你一个数字——0.133。但比赛里 70% 的分数在<b>分割</b>上——你必须画出像素级热力图。DINOv2 内部其实有更丰富的信息——它在 12 层 Transformer 的每一层都维护着 196 个位置的局部特征。下一章，打开这个黑箱。</p>
+
+<p><b>→ Ch2: 多尺度异常定位 — 从全局分数到像素级热力图</b></p>
+
+<hr/>
+
+<p>📷 图1.2：多视角对比图 — 6个类别5视角对比</p>
+<p>📷 图1.3：图片尺寸分布图 — 50个类别原始尺寸跨度</p>
+
+</doc>

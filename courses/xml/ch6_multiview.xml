@@ -1,0 +1,185 @@
+<doc>
+
+<callout emoji="❓" background-color="rgb(255,245,235)" border-color="rgb(250,150,80)">
+  <h2>一个视角说"越来越异常"，另一个视角说"越来越正常"</h2>
+  <p>同一个零件的 5 张照片——正上方、左斜 45°、右斜 45°、正前方、底部。直觉告诉你：它们看的是同一个零件，分数应该差不多。</p>
+  <p>但实验数据告诉你另一个故事：</p>
+  <p><b>D_sub_connector 类：视角 0 和视角 3 的 Spearman 相关系数是 −0.286。负相关。</b></p>
+  <p>如果 5 个视角之间几乎是独立的——甚至互相矛盾——那"融合"是什么意思？直接取 Max？取平均？还是保守判断？</p>
+</callout>
+
+<h1>📚 前章回顾</h1>
+
+<p>Ch5 你已经会了：从热力图提取分数 → AUROC/AP/F1 → 打包。但都是<b>逐视角独立</b>的——5 个视角没有交流。</p>
+
+<p><b>两个新概念：</b></p>
+<ul>
+  <li><b>Spearman ρ：</b>不看绝对值，看趋势。两个视角分数排名一致，ρ=1.0；完全相反，ρ=−1.0</li>
+  <li><b>融合（Fusion）：</b>把 5 个分数合并成 1 个</li>
+</ul>
+
+<h1>🎯 学习目标</h1>
+
+<table>
+  <colgroup><col width="140"/><col width="280"/><col width="280"/></colgroup>
+  <thead><tr>
+    <th background-color="rgb(242,243,245)"><b>维度</b></th>
+    <th background-color="rgb(242,243,245)"><b>🔴 学习前</b></th>
+    <th background-color="rgb(242,243,245)"><b>🟢 学习后</b></th>
+  </tr></thead>
+  <tbody>
+    <tr><td><b>视角关系</b></td><td>"5 个视角差不多，取平均就行"</td><td>能量化视角相关性矩阵，判断融合策略</td></tr>
+    <tr><td><b>融合策略</b></td><td>认为 Max 就是最佳</td><td>理解 Max/Mean/Weighted/Conservative 取舍</td></tr>
+    <tr><td><b>低相关性的意义</b></td><td>"视角不一致=模型不稳定"</td><td>理解视角不一致=免费信息源</td></tr>
+  </tbody>
+</table>
+
+<hr/>
+
+<h1>📖 主体内容</h1>
+
+<h2>6.1 实验设计</h2>
+
+<pre caption="实验流程"><code>
+对 3 个类别 × 15 个样本 × 5 视角
+  加载 INP-Former + DINOv2
+  逐视角推理 → anomaly score
+收集：(15样本 × 5视角) 分数矩阵
+→ Spearman 相关性 → 四种融合策略对比
+</code></pre>
+
+<h2>6.2 第一个发现：视角之间几乎不相关</h2>
+
+<p><b>D_sub_connector 的 5 视角 Spearman 相关性矩阵：</b></p>
+
+<table>
+  <colgroup><col width="60"/><col width="80"/><col width="80"/><col width="80"/><col width="80"/><col width="80"/></colgroup>
+  <thead><tr>
+    <th background-color="rgb(242,243,245)"></th>
+    <th background-color="rgb(242,243,245)">V0</th>
+    <th background-color="rgb(242,243,245)">V1</th>
+    <th background-color="rgb(242,243,245)">V2</th>
+    <th background-color="rgb(242,243,245)">V3</th>
+    <th background-color="rgb(242,243,245)">V4</th>
+  </tr></thead>
+  <tbody>
+    <tr><td><b>V0</b></td><td>1.00</td><td>+0.514</td><td>+0.579</td><td><b>−0.286</b></td><td>+0.361</td></tr>
+    <tr><td><b>V1</b></td><td></td><td>1.00</td><td>+0.393</td><td>−0.300</td><td>−0.089</td></tr>
+    <tr><td><b>V2</b></td><td></td><td></td><td>1.00</td><td>−0.004</td><td>+0.350</td></tr>
+    <tr><td><b>V3</b></td><td></td><td></td><td></td><td>1.00</td><td>+0.289</td></tr>
+  </tbody>
+</table>
+
+<callout emoji="🔑" background-color="rgb(240,251,239)" border-color="rgb(142,224,133)">
+  <p><b>三个反直觉事实：</b></p>
+  <ol>
+    <li>平均视角相关性只有 <b>0.18</b>，不是猜测的 0.6~0.8。5 个视角几乎是独立投票</li>
+    <li><b>V0-V3 是负相关（ρ=−0.286）</b>——视角 0（顶部打光）和视角 3（斜下方）在看完全不同的东西</li>
+    <li><b>V0-V2 相关性最高（+0.579）</b>——角度相近，信息部分重叠</li>
+  </ol>
+</callout>
+
+<table>
+  <colgroup><col width="140"/><col width="80"/><col width="140"/></colgroup>
+  <thead><tr>
+    <th background-color="rgb(242,243,245)"><b>类别</b></th>
+    <th background-color="rgb(242,243,245)"><b>平均 ρ</b></th>
+    <th background-color="rgb(242,243,245)"><b>最离奇发现</b></th>
+  </tr></thead>
+  <tbody>
+    <tr><td>D_sub_connector</td><td>0.181</td><td>V0-V3 <b>−0.286</b></td></tr>
+    <tr><td>3_adapter</td><td>0.276</td><td>V2-V4 <b>−0.079</b></td></tr>
+    <tr><td>DVD_switch</td><td>0.142</td><td>V0-V3 <b>−0.461</b></td></tr>
+  </tbody>
+</table>
+
+<h2>6.3 融合策略实测：Max 完胜</h2>
+
+<table>
+  <colgroup><col width="180"/><col width="140"/><col width="140"/><col width="140"/></colgroup>
+  <thead><tr>
+    <th background-color="rgb(242,243,245)"><b>策略</b></th>
+    <th background-color="rgb(242,243,245)"><b>D_sub_connector</b></th>
+    <th background-color="rgb(242,243,245)"><b>3_adapter</b></th>
+    <th background-color="rgb(242,243,245)"><b>DVD_switch</b></th>
+  </tr></thead>
+  <tbody>
+    <tr><td bg-color="var(--green-light)"><b>Max</b></td><td>0.325 ± 0.008</td><td>0.316 ± 0.010</td><td>0.306 ± 0.013</td></tr>
+    <tr><td>Conservative</td><td>0.302 ± 0.021</td><td>0.293 ± 0.022</td><td>0.283 ± 0.015</td></tr>
+    <tr><td>Weighted</td><td>0.291 ± 0.005</td><td>0.300 ± 0.009</td><td>0.275 ± 0.006</td></tr>
+    <tr><td>Mean</td><td>0.289 ± 0.005</td><td>0.299 ± 0.009</td><td>0.274 ± 0.006</td></tr>
+  </tbody>
+</table>
+
+<callout emoji="🔑" background-color="rgb(240,251,239)" border-color="rgb(142,224,133)">
+  <p><b>结论：</b></p>
+  <ol>
+    <li><b>Max 在三个类别上都是最高分</b>，比 Mean 高出 0.03（约 10~12%）。不是巧合——视角相关性低时，总有一个视角恰好对准异常</li>
+    <li>Weighted 跟 Mean 几乎一样——低相关性场景下，权重完全取决于分数大小没有额外信息</li>
+    <li><b>实战建议：A 榜用 Max。</b>简单、稳定、最不挑类别</li>
+  </ol>
+</callout>
+
+<h2>6.4 Max−Mean 差值 = 视角独立性指标</h2>
+
+<table>
+  <colgroup><col width="160"/><col width="120"/><col width="120"/></colgroup>
+  <thead><tr>
+    <th background-color="rgb(242,243,245)"><b>类别</b></th>
+    <th background-color="rgb(242,243,245)"><b>Max−Mean</b></th>
+    <th background-color="rgb(242,243,245)"><b>平均 ρ</b></th>
+  </tr></thead>
+  <tbody>
+    <tr><td>DVD_switch</td><td>0.0312</td><td>0.142（最低）</td></tr>
+    <tr><td>D_sub_connector</td><td>0.0361</td><td>0.181</td></tr>
+    <tr><td>3_adapter</td><td>0.0164</td><td>0.276（最高）</td></tr>
+  </tbody>
+</table>
+
+<callout emoji="💡" background-color="rgb(240,251,239)" border-color="rgb(142,224,133)">
+  <p><b>规则：</b>Max−Mean 差值越大 → 视角相关性越低 → 每个视角独立信息越多 → Max 越优于 Mean。</p>
+  <p>差值 &gt; 0.03：值得优化融合策略。差值 &lt; 0.02：取 Max 或 Mean 都行。</p>
+</callout>
+
+<h2>6.5 根源：物理规律，不是模型 bug</h2>
+
+<p>为什么 V0（正上方打光）和 V3（斜下方）会负相关？</p>
+
+<ol>
+  <li><b>光照方向：</b>正上方照明下凹陷产生阴影（高亮），侧光下同一凹陷可能被照亮（暗）</li>
+  <li><b>遮挡：</b>某些视角下零件被夹具或自身结构遮挡</li>
+  <li><b>缺陷朝向：</b>划痕平行于光源时几乎不可见，垂直时最清晰</li>
+</ol>
+
+<callout emoji="🔑" background-color="rgb(240,251,239)" border-color="rgb(142,224,133)">
+  <p><b>这不是 bug，是 feature。</b>正是因为 5 个视角捕捉到了不同的物理信息，所以你<b>必须用多视角</b>。负相关的视角对尤其珍贵：它们提供了互补信息。</p>
+</callout>
+
+<hr/>
+
+<h1>🔬 检查清单</h1>
+
+<ul>
+  <li>视角间平均相关性？→ <b>0.14~0.28</b>，近乎独立投票</li>
+  <li>有负相关吗？→ 有。D_sub_connector V0-V3=−0.286，DVD_switch V0-V3=<b>−0.461</b></li>
+  <li>Max 比 Mean 高多少？→ 约 0.03（10~12%）</li>
+  <li>Max−Mean 差值意味着什么？→ 视角独立性指标</li>
+  <li>A 榜推荐策略？→ <b>Max</b>。简单、全部最优</li>
+  <li>低相关性是坏事吗？→ <b>不是。</b>是多视角提供了互补信息</li>
+</ul>
+
+<hr/>
+
+<h1>❓ 新问题</h1>
+
+<p>有了分数级融合，Max 在三个类上都是最高分。但 0.32 的 anomaly score 在比赛里算什么水平？你需要把前 6 章的所有组件组装成一条完整的 A 榜流水线。</p>
+
+<p><b>→ Ch7: A 榜实战 — 从零到提交的完整流水线</b></p>
+
+<hr/>
+
+<p>📷 图6.1：D_sub_connector 视角相关性热力图</p>
+<p>📷 图6.2：三类别融合策略对比柱状图</p>
+<p>📷 图6.3：视角分歧度分布直方图</p>
+
+</doc>

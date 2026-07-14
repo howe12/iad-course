@@ -1,0 +1,138 @@
+<doc>
+
+<callout emoji="❓" background-color="rgb(255,245,235)" border-color="rgb(250,150,80)">
+  <h2>你的热力图上有 200,704 个像素。怎么变成 1 个排名分数？</h2>
+  <p>INP-Former 输出 448×448 异常热力图。但比赛看的是<b>三个指标按权重算出来的总分</b>。</p>
+  <p><b>从热力图到排行榜上的排名——中间有 5 个转换步骤。</b>每一步做错了，前面 4 章的功夫就白费了。</p>
+</callout>
+
+<h1>🎯 学习目标</h1>
+
+<table>
+  <colgroup><col width="140"/><col width="280"/><col width="280"/></colgroup>
+  <thead><tr>
+    <th background-color="rgb(242,243,245)"><b>维度</b></th>
+    <th background-color="rgb(242,243,245)"><b>🔴 学习前</b></th>
+    <th background-color="rgb(242,243,245)"><b>🟢 学习后</b></th>
+  </tr></thead>
+  <tbody>
+    <tr><td><b>指标</b></td><td>只知道 AUROC 越高越好</td><td>理解 AUROC/AP/F1max 各考察什么能力</td></tr>
+    <tr><td><b>分数转换</b></td><td>不知道热力图怎么变成图像级分数</td><td>掌握 max/top-k/adaptive 三种策略</td></tr>
+    <tr><td><b>提交实战</b></td><td>不知道提交文件长什么样</td><td>能跑完整"推理→mask→csv→打包"流程</td></tr>
+  </tbody>
+</table>
+
+<hr/>
+
+<h1>📖 主体内容</h1>
+
+<h2>5.1 五步转换流水线</h2>
+
+<pre caption="热力图→分数的5步转换"><code>
+热力图 [448, 448, float]
+    ↓ 步骤1：像素聚合 → 图像级分数
+图像级分数（per 样本）
+    ↓ 步骤2：所有样本的分数 + 标签 → 排序
+排序列表
+    ↓ 步骤3：计算 AUROC / AP / F1max
+子指标分数
+    ↓ 步骤4：加权：S = 0.3×S_cls + 0.7×S_seg
+综合得分 S
+    ↓ 步骤5：打包 → submission.zip → 上传
+</code></pre>
+
+<h2>5.2 步骤一：像素聚合 — 三种策略</h2>
+
+<table>
+  <colgroup><col width="130"/><col width="180"/><col width="180"/><col width="180"/></colgroup>
+  <thead><tr>
+    <th background-color="rgb(242,243,245)"><b>策略</b></th>
+    <th background-color="rgb(242,243,245)"><b>公式</b></th>
+    <th background-color="rgb(242,243,245)"><b>优点</b></th>
+    <th background-color="rgb(242,243,245)"><b>缺点</b></th>
+  </tr></thead>
+  <tbody>
+    <tr><td><b>Max</b></td><td><code>amap.max()</code></td><td>简单，抓到明显缺陷</td><td>对噪声极其敏感</td></tr>
+    <tr><td><b>Top-1%</b></td><td><code>topk(flat,1%).mean()</code></td><td>鲁棒，INP-Former默认</td><td>假设缺陷面积&lt;1%</td></tr>
+    <tr><td><b>Adaptive</b></td><td><code>mean+3σ</code>阈值</td><td>自适应每张图</td><td>阈值是启发式的</td></tr>
+  </tbody>
+</table>
+
+<h2>5.3 六大指标详解</h2>
+
+<table>
+  <colgroup><col width="120"/><col width="120"/><col width="440"/></colgroup>
+  <thead><tr>
+    <th background-color="rgb(242,243,245)"><b>指标</b></th>
+    <th background-color="rgb(242,243,245)"><b>归属</b></th>
+    <th background-color="rgb(242,243,245)"><b>衡量什么</b></th>
+  </tr></thead>
+  <tbody>
+    <tr><td><b>I-AUROC</b></td><td>S_cls</td><td>图像级排序质量——异常是否排在正常前面</td></tr>
+    <tr><td><b>I-AP</b></td><td>S_cls</td><td>在不平衡数据上比 AUROC 更敏感</td></tr>
+    <tr><td><b>P-AUROC</b></td><td>S_seg</td><td>像素级排序质量</td></tr>
+    <tr><td><b>P-AP</b></td><td>S_seg</td><td>像素级精确率</td></tr>
+    <tr><td><b>P-F1max</b></td><td>S_seg</td><td>同时惩罚漏检和误报——对阈值最敏感</td></tr>
+  </tbody>
+</table>
+
+<h2>5.4 A 榜实际公式</h2>
+
+<callout emoji="⚠️" background-color="rgb(255,248,230)" border-color="rgb(250,200,120)">
+  <p><b>A 榜分割权重是 0.7，不是 0.5。</b>零样本得分（0.2）不参与 A 榜，权重重新分配到分割。分割比分类重要 <b>2.3 倍</b>（0.7/0.3）。</p>
+</callout>
+
+<latex>S_A = 100 \times (0.3 \times S_{cls} + 0.7 \times S_{seg})</latex>
+
+<table>
+  <colgroup><col width="100"/><col width="400"/></colgroup>
+  <thead><tr>
+    <th background-color="rgb(242,243,245)"><b>得分</b></th>
+    <th background-color="rgb(242,243,245)"><b>公式</b></th>
+  </tr></thead>
+  <tbody>
+    <tr><td>S_cls</td><td>(I-AUROC + I-AP) / 2</td></tr>
+    <tr><td>S_seg</td><td>(P-AUROC + P-AP + P-F1max) / 3</td></tr>
+  </tbody>
+</table>
+
+<h2>5.5 提交格式</h2>
+
+<pre caption="submission.zip 结构"><code>
+submission.zip
+  ├── submission.csv              ← group_folder,anomaly_score
+  └── predicted_masks/
+       └── {category}/
+            └── {sample_id}/
+                 ├── 0_mask.png   ← 448×448 灰度图
+                 ├── 1_mask.png
+                 ├── 2_mask.png
+                 ├── 3_mask.png
+                 └── 4_mask.png
+</code></pre>
+
+<callout emoji="⚠️" background-color="rgb(255,248,230)" border-color="rgb(250,200,120)">
+  <p><b>不要自己打包 zip！</b>比赛方提供 competitor_toolkit/make_submission.py，它校验格式、图片尺寸、文件命名。格式错误直接 0 分。</p>
+</callout>
+
+<hr/>
+
+<h1>🔬 检查清单</h1>
+
+<ul>
+  <li>热力图到图像级分数有哪三种策略？→ max / top-1% mean / adaptive threshold</li>
+  <li>AUROC 衡量什么？→ 排序质量——异常是否排在正常前面</li>
+  <li>A 榜分割权重是多少？→ <b>0.7</b>（不是页面写的 0.5）</li>
+  <li>打包用哪个工具？→ competitor_toolkit/make_submission.py</li>
+  <li>mask 格式要求？→ 448×448 灰度 PNG，文件名 {view}_mask.png</li>
+</ul>
+
+<hr/>
+
+<h1>❓ 新问题</h1>
+
+<p>你现在知道怎么从热力图走到提交分数了。但每个样本有 5 个视角——你只是简单取了 max。5 个视角之间不是独立的——它们是同一个产品的不同角度。怎么利用这个多视角信息？</p>
+
+<p><b>→ Ch6: 多视角融合策略 — 1+1+1+1+1 > 5</b></p>
+
+</doc>

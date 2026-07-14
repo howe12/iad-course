@@ -1,0 +1,167 @@
+<doc>
+
+<callout emoji="❓" background-color="rgb(255,245,235)" border-color="rgb(250,150,80)">
+  <h2>如何在 DINOv2 之上加一层可学习机制，让它知道"插针区域红是正常的"？</h2>
+  <p>Ch2 的热力图在插针阵列上一片红——因为余弦距离无法区分"高频纹理"和"真正缺陷"。Ch3 解释了 DINOv2 的特征底层原理。</p>
+  <p>这就是 INP-Former 的核心贡献。它不是硬接分类器，而是在 DINOv2 中间插入 6 个可学习的<b>"INP 原型 token"</b>，让模型自己去学"什么程度的偏离算异常，什么程度的偏离只是纹理"。</p>
+</callout>
+
+<callout emoji="💡" background-color="rgb(240,251,239)" border-color="rgb(142,224,133)">
+  <p><b>一句话总结：</b>Ch2 用固定规则（余弦距离）判断异常；INP-Former 用可学习参数判断异常。前者像尺子——精度固定；后者像经验丰富的质检员——能根据产品类型调整判断标准。</p>
+</callout>
+
+<h1>📚 前章回顾</h1>
+
+<p>Ch2 的固定余弦距离无法适应产品差异 → Ch3 发现 3_adapter 同类散度为 0.37 → <b>需要可学习的 INP token。</b></p>
+
+<h1>🎯 学习目标</h1>
+
+<table>
+  <colgroup><col width="140"/><col width="280"/><col width="280"/></colgroup>
+  <thead><tr>
+    <th background-color="rgb(242,243,245)"><b>维度</b></th>
+    <th background-color="rgb(242,243,245)"><b>🔴 学习前</b></th>
+    <th background-color="rgb(242,243,245)"><b>🟢 学习后</b></th>
+  </tr></thead>
+  <tbody>
+    <tr><td><b>INP 原型机制</b></td><td>用固定的正常均值当"标准答案"</td><td>理解 INP token 通过交叉注意力动态匹配——可学习的"容错度"</td></tr>
+    <tr><td><b>三阶段架构</b></td><td>"INP-Former 就是 DINOv2 + 分类头"</td><td>理解聚合→瓶颈→解码的完整流程</td></tr>
+    <tr><td><b>训练 vs 推理</b></td><td>不知道 INP-Former 怎么训练的</td><td>理解 Gather Loss：INP token 包裹所有正常模式</td></tr>
+  </tbody>
+</table>
+
+<hr/>
+
+<h1>📖 主体内容</h1>
+
+<h2>4.1 整体架构：三层增强</h2>
+
+<pre caption="INP-Former 架构"><code>
+输入图片 (448×448)
+    ↓
+DINOv2 编码器（冻结）
+    ↓ 8层特征图 [target_layers=2~9]
+    ├──→ ① 聚合块 (Aggregation)
+    │      INP token × 交叉注意力 → agg_prototype
+    ├──→ ② 瓶颈 (Bottleneck)
+    │      FFN: 768→3072→768
+    └──→ ③ 解码器 (Decoder)
+           8×Prototype_Block → 重建残差 = 异常热力图
+</code></pre>
+
+<callout emoji="💡" background-color="rgb(240,251,239)" border-color="rgb(142,224,133)">
+  <p><b>类比：</b>DINOv2 像个翻译官。INP token 是 6 张"质检标准卡片"——每张写着一类正常模式（"正常纹理"、"正常反光"、"正常边缘"……）。聚合块让卡片和图片特征对对碰——匹配得上的正常，匹配不上的异常。</p>
+</callout>
+
+<h2>4.2 INP 原型 Token：可学习的"正常标准"</h2>
+
+<pre lang="python" caption="INP 初始化"><code>
+INP = nn.ParameterList([
+    nn.Parameter(torch.randn(6, 768))  # 第2层
+    nn.Parameter(torch.randn(6, 768))  # 第3层
+    ...  # 共8组，对应target_layers=[2,3,4,5,6,7,8,9]
+])
+</code></pre>
+
+<table>
+  <colgroup><col width="140"/><col width="280"/><col width="280"/></colgroup>
+  <thead><tr>
+    <th background-color="rgb(242,243,245)"></th>
+    <th background-color="rgb(242,243,245)"><b>Ch2 固定原型</b></th>
+    <th background-color="rgb(242,243,245)"><b>INP 可学习原型</b></th>
+  </tr></thead>
+  <tbody>
+    <tr><td>怎么来的</td><td>训练样本的特征均值</td><td>梯度下降训练出来</td></tr>
+    <tr><td>数量</td><td>每位置 1 个均值</td><td>每层 6 个独立 token</td></tr>
+    <tr><td>能否适应</td><td>❌ 固定不变</td><td>✅ 交叉注意力自适应</td></tr>
+    <tr><td>纹理容错</td><td>❌ 高纹理=高异常</td><td>✅ 学到了"纹理正常"</td></tr>
+  </tbody>
+</table>
+
+<h2>4.3 Gather Loss</h2>
+
+<pre lang="python" caption="Gather Loss — INP 包裹正常特征"><code>
+def gather_loss(query, keys):
+    # query: 特征图的每个 patch token (1024个)
+    # keys:  INP token (6个)
+    
+    # 计算每个 patch 到最近 INP token 的距离
+    distribution = 1 - cos_sim(query.unsqueeze(2), keys.unsqueeze(1))
+    distance, cluster_index = torch.min(distribution, dim=2)
+    
+    # Loss = 所有 patch 到最近 INP 的平均距离
+    return distance.mean()
+</code></pre>
+
+<callout emoji="🔑" background-color="rgb(240,251,239)" border-color="rgb(142,224,133)">
+  <p><b>关键洞察：</b>Gather Loss 只在正常样本上训练。训练完后，INP token "习惯"了正常样本的特征分布。推理时，缺陷样本的 patch 特征落在所有 6 个 INP token 的覆盖范围之外 → 距离大 → 异常。</p>
+</callout>
+
+<h2>4.4 3类实测：INP-Former vs Ch2</h2>
+
+<table>
+  <colgroup><col width="180"/><col width="140"/><col width="140"/><col width="100"/></colgroup>
+  <thead><tr>
+    <th background-color="rgb(242,243,245)"><b>类别</b></th>
+    <th background-color="rgb(242,243,245)"><b>INP-Former</b></th>
+    <th background-color="rgb(242,243,245)"><b>Ch2 多尺度</b></th>
+    <th background-color="rgb(242,243,245)"><b>差异</b></th>
+  </tr></thead>
+  <tbody>
+    <tr><td>3_adapter</td><td>0.748 ± 0.018</td><td>0.604 ± 0.081</td><td>+0.144</td></tr>
+    <tr><td>DVD_switch</td><td>0.778 ± 0.021</td><td>0.667 ± 0.132</td><td>+0.111</td></tr>
+    <tr><td>D_sub_connector</td><td>0.812 ± 0.042</td><td>0.623 ± 0.111</td><td>+0.189</td></tr>
+  </tbody>
+</table>
+
+<callout emoji="🔑" background-color="rgb(240,251,239)" border-color="rgb(142,224,133)">
+  <p>INP-Former 分数更高不是因为效果更差，而是<b>解码器把微小异常信号放大了</b>。标准差大幅缩小（0.02~0.04 vs 0.08~0.13）——INP token 的学习能力让模型对光照/纹理变化更鲁棒。</p>
+</callout>
+
+<h2>4.5 模型加载坑位</h2>
+
+<table>
+  <colgroup><col width="180"/><col width="180"/><col width="280"/></colgroup>
+  <thead><tr>
+    <th background-color="rgb(242,243,245)"></th>
+    <th background-color="rgb(242,243,245)"><b>代码默认值</b></th>
+    <th background-color="rgb(242,243,245)"><b>Checkpoint 实际</b></th>
+  </tr></thead>
+  <tbody>
+    <tr><td>聚合块数量</td><td>2</td><td><b>1</b></td></tr>
+    <tr><td>解码块数量</td><td>2</td><td><b>8</b> (len(target_layers))</td></tr>
+  </tbody>
+</table>
+
+<callout emoji="⚠️" background-color="rgb(255,248,230)" border-color="rgb(250,200,120)">
+  <p>官方开源代码中，fuse_layer_encoder/decoder 和训练用的不一致。正确做法：用 torch.load 检查 checkpoint keys → 数 aggregation/decoder 索引范围 → 反推正确结构。不要把代码默认值当训练值。</p>
+</callout>
+
+<hr/>
+
+<h1>🔬 检查清单</h1>
+
+<ul>
+  <li>INP 全称？→ <b>I</b>mage-<b>N</b>eutral <b>P</b>rototype</li>
+  <li>为什么是 6 个 INP token？→ 经验值——覆盖产品的 6 种主要正常模式</li>
+  <li>Gather Loss 的目标？→ 让每个 patch 到最近 INP 的距离最小</li>
+  <li>INP-Former 和 Ch2 的核心区别？→ 固定余弦 vs 可学习 INP + 交叉注意力 + 解码器重建</li>
+  <li>标准差为什么大幅缩小？→ INP token 学习了对光照/纹理的容错</li>
+  <li>Checkpoint 加载的坑？→ fuse_layer 不是块数，解码块数 = len(target_layers) = 8</li>
+</ul>
+
+<hr/>
+
+<h1>❓ 新问题</h1>
+
+<p>你现在有一个能输出逐像素异常热力图的完整模型。但比赛评分不只看热力图——它要的是分类分数（30%）+ 分割分数（70%），还要控制阈值、平衡假阳性/假阴性。</p>
+
+<p>光有热力图不够——你需要把它转化为比赛需要的分数格式。</p>
+
+<p><b>→ Ch5: 评分逻辑深度拆解 — 从热力图到提交分数</b></p>
+
+<hr/>
+
+<p>📷 图4.1：INP-Former 热力图 vs Ch2 对比</p>
+
+</doc>

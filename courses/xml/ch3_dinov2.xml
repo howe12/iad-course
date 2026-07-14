@@ -1,0 +1,185 @@
+<doc>
+
+<callout emoji="❓" background-color="rgb(255,245,235)" border-color="rgb(250,150,80)">
+  <h2>为什么一个没见过工业零件的 AI 能发现缺陷？</h2>
+  <p>Ch1 用 DINOv2 跑通了一个基线。Ch2 钻进了 DINOv2 内部，拿到了每层的 patch token。</p>
+  <p>但你有没有想过：<b>DINOv2 是在自然图片（狗、猫、风景）上训练的，它从来没见过工业零件。</b>为什么它提取的特征在这些零件上也有意义？</p>
+  <p>不是因为 DINOv2"认识"这些零件。而是因为它学会了<b>"看"</b>——比认识特定物体更底层的视觉能力。</p>
+</callout>
+
+<h1>📚 前章回顾</h1>
+
+<p><b>你已经知道的：</b></p>
+<ul>
+  <li>Ch1：DINOv2 接收 448×448 图片 → 输出 768 维全局特征向量</li>
+  <li>Ch2：DINOv2 内部有 12 层 Transformer，每层维护 patch token（32×32 网格）</li>
+</ul>
+
+<p><b>本章要补充的：</b>DINOv2 是怎么训练的（自监督学习）、特征空间分布规律、register token 原理。</p>
+
+<hr/>
+
+<h1>🎯 学习目标</h1>
+
+<table>
+  <colgroup><col width="140"/><col width="280"/><col width="280"/></colgroup>
+  <thead><tr>
+    <th background-color="rgb(242,243,245)"><b>维度</b></th>
+    <th background-color="rgb(242,243,245)"><b>🔴 学习前</b></th>
+    <th background-color="rgb(242,243,245)"><b>🟢 学习后</b></th>
+  </tr></thead>
+  <tbody>
+    <tr><td><b>自监督学习</b></td><td>"没有标签就没法训练"</td><td>理解教师-学生蒸馏框架——不需要任何标签</td></tr>
+    <tr><td><b>特征空间</b></td><td>把 768 维向量当黑箱</td><td>能理解同类紧聚、异类分离的现象</td></tr>
+    <tr><td><b>Register Token</b></td><td>不知道为什么叫 dinov2reg</td><td>理解 register token 解决了特征崩溃问题</td></tr>
+  </tbody>
+</table>
+
+<hr/>
+
+<h1>📖 主体内容</h1>
+
+<h2>3.1 自监督学习：你不告诉我答案，我自己猜</h2>
+
+<pre caption="教师-学生蒸馏框架"><code>
+同一张图片，做两种不同的随机裁剪：
+  → Crop A（全局视角，占图片 50%+ 面积）
+  → Crop B（局部视角，占图片不到 50% 面积）
+
+教师网络看 Crop A → 输出特征向量 teacher_A
+学生网络看 Crop B → 输出特征向量 student_B
+
+训练目标：让 student_B 尽量接近 teacher_A
+</code></pre>
+
+<callout emoji="💡" background-color="rgb(240,251,239)" border-color="rgb(142,224,133)">
+  <p><b>类比：</b>你给一个小孩看一张照片的"半张脸"（局部），然后问他"这张脸属于哪张全景照？"。小孩通过不断对比半张脸和全景照，学会了脸的底层结构。他没学过"这是张三的脸"，但他学会了<b>"脸的基本构成规律"</b>。</p>
+</callout>
+
+<p><b>教师网络不是固定的——它在"自我进化"：</b></p>
+
+<pre lang="python" caption="EMA 更新"><code>
+teacher_params = 0.996 × teacher_params + 0.004 × student_params
+# 教师 = 过去所有学生版本的"加权平均"
+# 像一个慢慢积累经验的老师——不会被某一个学生的错误带偏
+</code></pre>
+
+<h2>3.2 特征空间分布：用实际数据打开</h2>
+
+<p>从训练集取 5 个类别，用 PCA 降维到 2D（见文末 图3.1）。</p>
+
+<p><b>跨类别的特征相似度矩阵：</b></p>
+
+<table>
+  <colgroup><col width="130"/><col width="80"/><col width="80"/><col width="80"/><col width="80"/></colgroup>
+  <thead><tr>
+    <th background-color="rgb(242,243,245)"></th>
+    <th background-color="rgb(242,243,245)">3_adapter</th>
+    <th background-color="rgb(242,243,245)">battery</th>
+    <th background-color="rgb(242,243,245)">DVD_switch</th>
+    <th background-color="rgb(242,243,245)">effect_tr.</th>
+  </tr></thead>
+  <tbody>
+    <tr><td><b>3_adapter</b></td><td>1.00</td><td>0.09</td><td>0.09</td><td>0.09</td></tr>
+    <tr><td><b>battery</b></td><td></td><td>1.00</td><td>0.13</td><td>0.23</td></tr>
+    <tr><td><b>DVD_switch</b></td><td></td><td></td><td>1.00</td><td>0.27</td></tr>
+    <tr><td><b>effect_transistor</b></td><td></td><td></td><td></td><td>1.00</td></tr>
+  </tbody>
+</table>
+
+<callout emoji="🔑" background-color="rgb(240,251,239)" border-color="rgb(142,224,133)">
+  <p>跨类平均相似度仅 <b>0.21</b>，类内 1.00，差距 0.79。不同类别的零件在 DINOv2 眼中是完全不同的东西。</p>
+</callout>
+
+<p><b>同类样本的一致性（直接解释 Ch1 的异常分数！）：</b></p>
+
+<table>
+  <colgroup><col width="200"/><col width="140"/><col width="100"/></colgroup>
+  <thead><tr>
+    <th background-color="rgb(242,243,245)"><b>类别</b></th>
+    <th background-color="rgb(242,243,245)"><b>同类相似度均值</b></th>
+    <th background-color="rgb(242,243,245)"><b>Ch1 异常分</b></th>
+  </tr></thead>
+  <tbody>
+    <tr><td>effect_transistor</td><td><b>0.987</b>（最紧）</td><td>0.044（最低）</td></tr>
+    <tr><td>circuit_breaker</td><td>0.977</td><td>—</td></tr>
+    <tr><td>DVD_switch</td><td>0.937</td><td>—</td></tr>
+    <tr><td>battery</td><td>0.827</td><td>—</td></tr>
+    <tr><td>3_adapter</td><td><b>0.371</b>（最散）</td><td>0.081（中等偏高）</td></tr>
+  </tbody>
+</table>
+
+<callout emoji="🔑" background-color="rgb(240,251,239)" border-color="rgb(142,224,133)">
+  <p><b>现在回头看 Ch1 的基线分数：</b>effect_transistor 的样本特征紧得像一个点（相似度 0.99），任何偏差都极其微小 → 余弦距离小。3_adapter 的样本特征散得像一团雾（相似度 0.37）→ 余弦距离自然大。<b>这不是模型的问题，是产品本身的特征。</b></p>
+</callout>
+
+<h2>3.3 特征随层深化的演变</h2>
+
+<p>同一张图在第 0/3/6/9/11 层的特征活跃度（见文末 图3.2）：</p>
+
+<table>
+  <colgroup><col width="120"/><col width="550"/></colgroup>
+  <thead><tr>
+    <th background-color="rgb(242,243,245)"><b>层</b></th>
+    <th background-color="rgb(242,243,245)"><b>关注的信息</b></th>
+  </tr></thead>
+  <tbody>
+    <tr><td>Layer 0</td><td>基本就是原始像素值，没有结构</td></tr>
+    <tr><td>Layer 3</td><td>边缘、纹理的轮廓浮现。高频区域激活高</td></tr>
+    <tr><td>Layer 6</td><td>几何结构——圆形、方形、孔洞边界清晰</td></tr>
+    <tr><td>Layer 9</td><td>语义信息主导——整体形状、部件归类</td></tr>
+    <tr><td>Layer 11</td><td>特征高度抽象，不同区域激活趋于均匀</td></tr>
+  </tbody>
+</table>
+
+<callout emoji="💡" background-color="rgb(240,251,239)" border-color="rgb(142,224,133)">
+  <p>浅层特征适合检测<b>纹理缺陷</b>（划痕、毛刺）；深层特征适合检测<b>结构缺陷</b>（缺件、形变）。融合多层 = 兼顾两者。</p>
+</callout>
+
+<h2>3.4 Register Token：为什么必须用 `_reg` 版本</h2>
+
+<callout emoji="⚠️" background-color="rgb(255,248,230)" border-color="rgb(250,200,120)">
+  <p><b>问题：ViT 的"特征崩溃"现象。</b>原始 DINOv2 在"干净"图片上（大面积纯色背景、均匀纹理），所有 patch token 变得高度相似，丢失大量空间信息。工业零件图片恰好就是这种"干净"图片。</p>
+</callout>
+
+<p><b>解决方案：Register Token（Darcet et al., 2024）</b></p>
+
+<pre caption="Token 结构对比"><code>
+标准 ViT:    [CLS, patch_1, patch_2, ..., patch_196]   (197个)
+Register版:  [CLS, reg_1, reg_2, reg_3, reg_4, patch_1, ...]  (201个)
+</code></pre>
+
+<p>这 4 个 register token 是"垃圾桶 token"——专门吸走会让 patch token 坍缩的信息。</p>
+
+<callout emoji="💡" background-color="rgb(240,251,239)" border-color="rgb(142,224,133)">
+  <p><b>类比：</b>一个班有 30 个学生（patch token），老师要让他们各自发展特长。但有 4 个"万能学生"（register token）——不考试不排名，专门做重复性杂务（吸收坍缩信息），让其他 30 个学生专心发展自己的方向。</p>
+</callout>
+
+<hr/>
+
+<h1>🔬 检查清单</h1>
+
+<ul>
+  <li>DINOv2 训练需要标签吗？→ <b>不需要</b>，教师-学生自蒸馏框架</li>
+  <li>跨类平均相似度多少？→ <b>0.21</b>，类间分离非常好</li>
+  <li>为什么 3_adapter 的异常分数比 effect_transistor 高？→ 因为前者同类相似度 0.37（散），后者 0.99（紧）</li>
+  <li>Register token 解决什么问题？→ ViT 在干净图片上的<b>特征崩溃</b></li>
+  <li>浅层和深层分别擅长什么？→ 浅层=纹理缺陷，深层=结构缺陷</li>
+</ul>
+
+<hr/>
+
+<h1>❓ 新问题</h1>
+
+<p>你花了三章时间，从"给一个数字"升级到"画一张热力图"。但你始终在用 DINOv2 的<b>固定特征</b>——DINOv2 的参数一动没动。</p>
+
+<p>INP-Former 在 DINOv2 之上加了什么？可学习的 INP 原型是怎么"适应"不同类别的？为什么 INP-Former 能区分"高纹理"和"真缺陷"？</p>
+
+<p><b>→ Ch4: INP-Former 完整拆解 — 可学习原型与像素级异常检测</b></p>
+
+<hr/>
+
+<p>📷 图3.1：DINOv2 特征空间 PCA 可视化</p>
+<p>📷 图3.2：特征随层深化 — 第0/3/6/9/11层特征活跃度</p>
+
+</doc>

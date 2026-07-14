@@ -1,0 +1,136 @@
+<doc>
+
+<callout emoji="❓" background-color="rgb(255,245,235)" border-color="rgb(250,150,80)">
+  <h2>排行榜有人做到了 99.82 分。他们用的是什么？</h2>
+  <p>INP-Former（重建式方法）在 A 榜拿了 46.8 分。但排行榜冠军 99.82 分用的是 CLIP/VLM 路线——一个完全不同的范式。</p>
+  <p>本章分析 CLIP 零样本异常检测的原理、我们在容器上的复现结果、以及为什么纯零样本 CLIP 不 work。</p>
+</callout>
+
+<h1>🎯 学习目标</h1>
+
+<table>
+  <colgroup><col width="140"/><col width="280"/><col width="280"/></colgroup>
+  <thead><tr>
+    <th background-color="rgb(242,243,245)"><b>维度</b></th>
+    <th background-color="rgb(242,243,245)"><b>🔴 学习前</b></th>
+    <th background-color="rgb(242,243,245)"><b>🟢 学习后</b></th>
+  </tr></thead>
+  <tbody>
+    <tr><td><b>CLIP vs INP-Former</b></td><td>以为只是换了 backbone</td><td>理解两种完全不同的范式：重建 vs 零样本语义</td></tr>
+    <tr><td><b>CLIP 失败原因</b></td><td>"是不是模型不够大"</td><td>理解工业缺陷不在 CLIP 训练数据的语义空间中</td></tr>
+    <tr><td><b>提分方向</b></td><td>不知道下一步怎么走</td><td>WinCLIP+/Prompt Learning/Adapter 三条路线</td></tr>
+  </tbody>
+</table>
+
+<hr/>
+
+<h1>📖 主体内容</h1>
+
+<h2>8.1 CLIP vs INP-Former：两种完全不同的范式</h2>
+
+<table>
+  <colgroup><col width="130"/><col width="280"/><col width="280"/></colgroup>
+  <thead><tr>
+    <th background-color="rgb(242,243,245)"></th>
+    <th background-color="rgb(242,243,245)"><b>INP-Former（重建式）</b></th>
+    <th background-color="rgb(242,243,245)"><b>CLIP（零样本语义）</b></th>
+  </tr></thead>
+  <tbody>
+    <tr><td><b>类比</b></td><td>质检员记"好的长什么样"</td><td>见过世面的人说"这不对劲"</td></tr>
+    <tr><td><b>核心思路</b></td><td>记住正常样本 → 对比差异</td><td>语言+视觉对齐 → 发现不匹配</td></tr>
+    <tr><td><b>对训练集</b></td><td><b>必须学</b>（记忆正常模式）</td><td><b>不需要学</b>（靠常识判断）</td></tr>
+    <tr><td><b>泛化</b></td><td>见过的类能分辨，没见过的瞎猜</td><td>理论上零样本，实际受限</td></tr>
+  </tbody>
+</table>
+
+<h2>8.2 实验 1：Naive CLIP Prompting</h2>
+
+<p><b>方法：</b>CLIP ViT-L/14 + "a damaged capacitor" vs "a perfect capacitor"</p>
+
+<p><b>结果：</b>50 类分数全部集中在 0.5 附近，标准差接近 0。<b>完全没有区分度。</b></p>
+
+<table>
+  <colgroup><col width="140"/><col width="120"/><col width="120"/></colgroup>
+  <thead><tr>
+    <th background-color="rgb(242,243,245)"><b>指标</b></th>
+    <th background-color="rgb(242,243,245)"><b>INP-Former</b></th>
+    <th background-color="rgb(242,243,245)"><b>CLIP Naive</b></th>
+  </tr></thead>
+  <tbody>
+    <tr><td>分数范围</td><td>0.24 ~ 0.56</td><td>0.496 ~ 0.513</td></tr>
+    <tr><td>区分度</td><td>✅ 有</td><td>❌ 无</td></tr>
+  </tbody>
+</table>
+
+<callout emoji="🔑" background-color="rgb(240,251,239)" border-color="rgb(142,224,133)">
+  <p><b>根因：</b>CLIP 预训练数据（4 亿图文对）中几乎没有工业缺陷图片。CLIP 知道"capacitor"是什么，但分不清"鼓包的电容"和"完好的电容"。</p>
+</callout>
+
+<h2>8.3 实验 2：WinCLIP v2</h2>
+
+<p><b>方法：</b>全图 attention map + 4 象限窗口评分 + 80 prompts 组合 ensemble</p>
+
+<table>
+  <colgroup><col width="180"/><col width="80"/><col width="80"/></colgroup>
+  <thead><tr>
+    <th background-color="rgb(242,243,245)"><b>类别</b></th>
+    <th background-color="rgb(242,243,245)"><b>μ</b></th>
+    <th background-color="rgb(242,243,245)"><b>σ</b></th>
+  </tr></thead>
+  <tbody>
+    <tr><td>D_sub_connector</td><td>0.507</td><td>0.001</td></tr>
+    <tr><td>3_adapter</td><td>0.509</td><td>0.000</td></tr>
+    <tr><td>DVD_switch</td><td>0.511</td><td>0.003</td></tr>
+  </tbody>
+</table>
+
+<p><b>结果：仍无区分度，所有分数 ≈ 0.5。</b></p>
+
+<callout emoji="⚠️" background-color="rgb(255,248,230)" border-color="rgb(250,200,120)">
+  <p><b>三个技术原因：</b></p>
+  <ol>
+    <li><b>语言-视觉不对齐：</b>CLIP 的 patch-level 特征未经 language supervision，论文 Table 8 也确认了</li>
+    <li><b>Attention map 无效：</b>ViT self-attention 聚合了全局上下文，局部细节被稀释</li>
+    <li><b>Prompt 不匹配：</b>"damaged capacitor" 在 CLIP 语义空间里和真实电容缺陷对不上</li>
+  </ol>
+</callout>
+
+<h2>8.4 为什么排行榜有人做到 99 分？</h2>
+
+<p>可能的路线（非单纯 zero-shot CLIP）：</p>
+
+<table>
+  <colgroup><col width="180"/><col width="500"/></colgroup>
+  <thead><tr>
+    <th background-color="rgb(242,243,245)"><b>方法</b></th>
+    <th background-color="rgb(242,243,245)"><b>做法</b></th>
+  </tr></thead>
+  <tbody>
+    <tr><td><b>WinCLIP+</b></td><td>用训练集正常样本做 visual reference，计算测试图和最近正常图的差异</td></tr>
+    <tr><td><b>AnomalyCLIP</b></td><td>在 CLIP 基础上加轻量 adapter，用少量数据训练</td></tr>
+    <tr><td><b>DINOv2 + CLIP 融合</b></td><td>DINOv2 提取局部特征 + CLIP 做语义引导</td></tr>
+    <tr><td><b>Prompt Learning</b></td><td>可学习的 prompt token（不是固定文本）</td></tr>
+  </tbody>
+</table>
+
+<hr/>
+
+<h1>🔬 检查清单</h1>
+
+<ul>
+  <li>CLIP 和 INP-Former 的本质区别？→ 零样本语义 vs 重建式学习</li>
+  <li>Naive CLIP 为什么不 work？→ 工业缺陷不在 CLIP 训练数据的语义空间中</li>
+  <li>WinCLIP v2 分数多少？→ 全部 ~0.5，无区分度</li>
+  <li>fp16 下 prompt ensemble 怎么避免 NaN？→ max-pooling over prompts，不 average</li>
+  <li>下一步？→ WinCLIP+（用正常样本做 visual reference）</li>
+</ul>
+
+<hr/>
+
+<h1>❓ 新问题</h1>
+
+<p>纯零样本 CLIP 已经验证不可行。但 WinCLIP 论文的核心得分来源是 WinCLIP+——用训练集的正常图片做 visual reference。</p>
+
+<p><b>下一步：WinCLIP+ — 利用 50 类各 20 张正常样本，让 CLIP 学会"这个零件正常长什么样"</b></p>
+
+</doc>

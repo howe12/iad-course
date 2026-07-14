@@ -1,0 +1,182 @@
+<doc>
+
+<callout emoji="❓" background-color="rgb(255,245,235)" border-color="rgb(250,150,80)">
+  <h2>不知道异常在哪里的检测 = 没有用的检测</h2>
+  <p>Ch1 的 DINOv2 全局余弦距离告诉你"这张图可能有问题"。但比赛评分里，<b>分割得分占 50%</b>——你不仅要判断有没有缺陷，还要定位缺陷在哪个像素。</p>
+  <p>想象产线上的质检员：你的模型说"这个零件异常分数 0.7"。质检员看一眼零件——光洁如新。"哪里异常？" 你答不上来。本章从全局判断升级到逐像素定位。</p>
+</callout>
+
+<h1>📚 前章回顾：从"话费余额"到"通话详单"</h1>
+
+<p>Ch1 结束时，工具是 <code>encoder(img) → [768维向量] → 余弦距离 → 1个数字</code>。</p>
+
+<p>DINOv2 内部其实比你用的多得多：</p>
+
+<pre caption="ViT 工作原理"><code>
+一张 448×448 的图片
+  → 切成 32×32 个网格，每个小格 14×14 像素
+  → 提取中心的 14×14=196 个小格作为 "patch"
+  → 每个 patch 编码成 768 维的 "token"
+  → 加上 1 个 CLS token + 4 个 register token = 201 个 token
+  → 经过 12 层 Transformer 处理
+  → 每层 196 个 patch token 可还原成 14×14 空间特征图
+</code></pre>
+
+<callout emoji="💡" background-color="rgb(240,251,239)" border-color="rgb(142,224,133)">
+  <p><b>类比：</b>你有一张班级合照。Ch1 只看照片背面写的"三年二班"（CLS token）。本章翻到照片正面，逐个看每个学生的脸（patch token）。</p>
+</callout>
+
+<h2>为什么用"多层"而不是一层</h2>
+
+<p>就像人眼看东西：</p>
+<ul>
+  <li><b>第一眼（浅层 Layer 3）：</b>看到颜色、边缘、纹理——"这个是红色的，那个是金属的"</li>
+  <li><b>第二眼（中层 Layer 6）：</b>看到形状、部件——"这里有个螺丝孔，那边是散热片"</li>
+  <li><b>第三眼（深层 Layer 9, 11）：</b>看到整体语义——"这是一块完整的 PCB 板"</li>
+</ul>
+
+<hr/>
+
+<h1>🎯 学习目标</h1>
+
+<table>
+  <colgroup><col width="140"/><col width="280"/><col width="280"/></colgroup>
+  <thead><tr>
+    <th background-color="rgb(242,243,245)"><b>维度</b></th>
+    <th background-color="rgb(242,243,245)"><b>🔴 学习前</b></th>
+    <th background-color="rgb(242,243,245)"><b>🟢 学习后</b></th>
+  </tr></thead>
+  <tbody>
+    <tr><td><b>全局 vs 像素级</b></td><td>只有一个全局分数（如 0.133），不知道异常在哪里</td><td>能生成 448×448 异常热力图，高亮可疑像素区域</td></tr>
+    <tr><td><b>多尺度特征</b></td><td>只用 DINOv2 最后一层，丢失浅层纹理细节</td><td>融合 Layer 3/6/9/11 四个尺度，兼顾纹理和语义</td></tr>
+    <tr><td><b>ViT patch 机制</b></td><td>把 DINOv2 当黑箱</td><td>理解 patch token→空间特征图的变换过程</td></tr>
+  </tbody>
+</table>
+
+<hr/>
+
+<h1>📖 主体内容</h1>
+
+<h2>2.1 从 [768] 到 [768, 14, 14]：空间特征图怎么来的</h2>
+
+<p>Ch1 只用了 CLS token：<code>feat = encoder(img)  # [B, 768]</code></p>
+
+<p>要拿到 patch token，需要手动遍历层：</p>
+
+<pre lang="python" caption="提取多层 patch token"><code>
+x = encoder.prepare_tokens(img)  # 初始化 token（201个）
+for i, blk in enumerate(encoder.blocks):
+    x = blk(x)  # 经过一层 Transformer
+    if i in [3, 6, 9, 11]:  # 在第 3/6/9/11 层停下来
+        patch_feats = x[:, 5:, :]  # 去掉前 5 个 token（CLS+4个register）
+        patch_feats = patch_feats.reshape(B, 768, 14, 14)  # 还原为空间图
+        features.append(patch_feats)
+</code></pre>
+
+<callout emoji="💡" background-color="rgb(240,251,239)" border-color="rgb(142,224,133)">
+  <p><b>关键变化：</b>[B, 768] 变成了 [B, 768, 14, 14]。多了两个维度——14×14 的空间网格。每个位置 (i,j) 有自己独立的 768 维向量。你可以对左上角和右下角分别算异常分数了。</p>
+</callout>
+
+<h2>2.2 逐 patch 余弦距离：从特征图到热力图</h2>
+
+<pre lang="python" caption="逐patch余弦距离 → 热力图"><code>
+for layer in layers:
+    feat = features[layer]      # [1, 768, 14, 14]
+    proto = prototypes[layer]   # [1, 768, 14, 14]
+    
+    # 把所有 196 个位置展平，逐一算余弦距离
+    cos_sim = F.cosine_similarity(
+        feat.permute(0,2,3,1).reshape(-1, 768),  # [196, 768]
+        proto.permute(0,2,3,1).reshape(-1, 768)   # [196, 768]
+    )
+    anomaly = 1 - cos_sim  # [196]
+    anomaly = anomaly.reshape(1, 1, 14, 14)
+    anomaly = F.interpolate(anomaly, size=448)  # 上采样
+</code></pre>
+
+<h2>2.3 读懂热力图：三种典型模式</h2>
+
+<callout emoji="⚠️" background-color="rgb(255,248,230)" border-color="rgb(250,200,120)">
+  <p><b>核心教训：热力图上的红色不等于缺陷。</b>它只告诉你"这个区域的特征和正常均值有差异"。这个差异是因为产品纹理（正常）还是缺陷（异常），当前方法完全分不清。</p>
+</callout>
+
+<table>
+  <colgroup><col width="160"/><col width="500"/></colgroup>
+  <thead><tr>
+    <th background-color="rgb(242,243,245)"><b>模式</b></th>
+    <th background-color="rgb(242,243,245)"><b>现象 & 原因</b></th>
+  </tr></thead>
+  <tbody>
+    <tr><td><b>高纹理区域天然"热"</b></td><td>3_adapter 顶部插针阵列——即使产品正常，微小间隙和反射变化也让热力图变红。不是缺陷，是高频纹理的固有特征</td></tr>
+    <tr><td><b>边缘和阴影自带异常</b></td><td>DVD_switch 金属壳体反光区域一片红。但如果所有正常样本都有这个反光，它算异常吗？</td></tr>
+    <tr><td><b>均匀区域最"冷"</b></td><td>纯色塑料面板、PCB 基板等大面积均匀区域——这是你想要的：模型说"这里完全正常"</td></tr>
+  </tbody>
+</table>
+
+<h2>2.4 3类测试结果</h2>
+
+<table>
+  <colgroup><col width="180"/><col width="120"/><col width="120"/><col width="80"/></colgroup>
+  <thead><tr>
+    <th background-color="rgb(242,243,245)"><b>类别</b></th>
+    <th background-color="rgb(242,243,245)"><b>像素异常均值</b></th>
+    <th background-color="rgb(242,243,245)"><b>Ch1 全局分</b></th>
+    <th background-color="rgb(242,243,245)"><b>倍数</b></th>
+  </tr></thead>
+  <tbody>
+    <tr><td>3_adapter</td><td>0.604</td><td>0.081</td><td>7.5×</td></tr>
+    <tr><td>DVD_switch</td><td>0.667</td><td>0.184</td><td>3.6×</td></tr>
+    <tr><td>D_sub_connector</td><td>0.623</td><td>0.147</td><td>4.2×</td></tr>
+  </tbody>
+</table>
+
+<callout emoji="🔑" background-color="rgb(240,251,239)" border-color="rgb(142,224,133)">
+  <p><b>分数翻倍不是模型变差了——是度量变了。</b>Ch1 把整个热力图压成 1 个数，自然低。像素级保留空间分布，分数自然高。两套分数不可直接比较。</p>
+</callout>
+
+<h2>2.5 Ch1→Ch2→Ch4：三阶段能力对比</h2>
+
+<table>
+  <colgroup><col width="140"/><col width="160"/><col width="160"/><col width="200"/></colgroup>
+  <thead><tr>
+    <th background-color="rgb(242,243,245)"><b>维度</b></th>
+    <th background-color="rgb(242,243,245)"><b>Ch1 全局</b></th>
+    <th background-color="rgb(242,243,245)"><b>Ch2 多尺度</b></th>
+    <th background-color="rgb(242,243,245)"><b>INP-Former (Ch4)</b></th>
+  </tr></thead>
+  <tbody>
+    <tr><td>输入</td><td>CLS token</td><td>4层 patch tokens</td><td>8层 + INP原型</td></tr>
+    <tr><td>输出</td><td>1个分数</td><td>448×448 热力图</td><td>448×448 热力图</td></tr>
+    <tr><td>空间信息</td><td>❌</td><td>✅</td><td>✅</td></tr>
+    <tr><td>可学习参数</td><td>0</td><td>0</td><td>~3000万</td></tr>
+    <tr><td>纹理/缺陷区分</td><td>❌</td><td>❌</td><td>✅</td></tr>
+  </tbody>
+</table>
+
+<hr/>
+
+<h1>🔬 检查清单</h1>
+
+<ul>
+  <li>DINOv2 把图片切成多少个 patch？→ <b>196 个</b>（14×14），每个 32×32 像素</li>
+  <li>多尺度用了哪几层？→ Layer 3（纹理）、6（形状）、9、11（语义）</li>
+  <li>热力图原始分辨率？→ 14×14，上采样到 448×448</li>
+  <li>热力图"红"的区域一定是缺陷吗？→ <b>不一定</b>，高纹理、边缘、反光都会红</li>
+  <li>Ch4 INP-Former 解决了什么？→ 可学习原型能自适应区分"正常纹理"和"真正缺陷"</li>
+</ul>
+
+<hr/>
+
+<h1>❓ 新问题</h1>
+
+<p>你的热力图在插针阵列上一片红——但你知道那里没有缺陷。余弦距离说"这里和原型不一样"，但它分不清这个"不一样"是因为产品固有特征还是真正的瑕疵。</p>
+
+<p>这个问题的根源在 DINOv2 本身——它毕竟是在自然图片上训练的。为什么它对"没见过"的工业零件也能提取有意义的特征？register token 是什么？</p>
+
+<p><b>→ Ch3: DINOv2 深度解析 — 自监督视觉基础模型如何"看懂"工业零件</b></p>
+
+<hr/>
+
+<p>📷 图2.1：3_adapter 异常热力图示例</p>
+
+</doc>

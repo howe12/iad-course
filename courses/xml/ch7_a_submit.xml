@@ -1,0 +1,185 @@
+<doc>
+
+<callout emoji="❓" background-color="rgb(255,245,235)" border-color="rgb(250,150,80)">
+  <h2>前 6 章全部验证过，但还没提交过一次</h2>
+  <p>你分别掌握了：数据加载（Ch1）、热力图生成（Ch2）、DINOv2 特征提取（Ch3）、INP-Former 推理（Ch4）、评分转换（Ch5）、多视角融合（Ch6）。</p>
+  <p>但至今你还没提交过一次。本章做一件事：<b>把 Ch1~Ch6 的所有模块串成一条自动化流水线，一键跑完 50 个类别，生成 submission.zip。</b></p>
+</callout>
+
+<h1>🎯 学习目标</h1>
+
+<table>
+  <colgroup><col width="280"/><col width="380"/></colgroup>
+  <thead><tr>
+    <th background-color="rgb(242,243,245)"><b>🔴 学习前</b></th>
+    <th background-color="rgb(242,243,245)"><b>🟢 学习后</b></th>
+  </tr></thead>
+  <tbody>
+    <tr><td>每个模块独立跑过，但不清楚怎么串起来</td><td>掌握从原始图片到 submission.zip 的完整自动化流程</td></tr>
+    <tr><td>不知道提交长什么样</td><td>能生成符合比赛规范的 zip，并在本地验证格式</td></tr>
+  </tbody>
+</table>
+
+<hr/>
+
+<h1>📖 主体内容</h1>
+
+<h2>7.1 流水线设计：五步走</h2>
+
+<pre caption="完整流水线"><code>
+图片 → DINOv2 → INP-Former → 热力图 → Max融合 → 分数
+                                                   ↓
+                                          submission.csv + masks/
+                                                   ↓
+                                          submission.zip
+</code></pre>
+
+<pre lang="python" caption="ch7_pipeline.py 五段结构"><code>
+# 段1：加载模型
+encoder = vit_encoder.load("dinov2reg_vit_base_14")
+model = INP_Former(encoder, Bottleneck, Agg, Dec, ...)
+model.load_state_dict(torch.load(ckpt_path), strict=True)
+
+# 段2：推理函数（Ch2+Ch4+Ch5融合）
+@torch.no_grad()
+def infer(img_path):
+    en, de = model(img)[:2]                     # Ch4
+    amap, _ = cal_anomaly_maps(en, de, 448)     # Ch2
+    amap = gaussian_filter(amap, sigma=4.0)      # Ch2
+    score = top_k_mean(amap, k=0.1%)             # Ch5
+    return score, amap
+
+# 段3：遍历全量数据
+for category in all_50_categories:
+    for sample in category.samples:
+        for view in [0,1,2,3,4]:
+            score, amap = infer(view_img)
+        final_score = max(view_scores)           # Ch6: Max
+        save_masks(view_maps)
+
+# 段4：打包提交
+subprocess.run(["python3", "make_submission.py", "--zip", "submission.zip"])
+</code></pre>
+
+<h2>7.2 每张图的五步变换</h2>
+
+<table>
+  <colgroup><col width="60"/><col width="180"/><col width="180"/><col width="180"/></colgroup>
+  <thead><tr>
+    <th background-color="rgb(242,243,245)"><b>步骤</b></th>
+    <th background-color="rgb(242,243,245)"><b>输入</b></th>
+    <th background-color="rgb(242,243,245)"><b>输出</b></th>
+    <th background-color="rgb(242,243,245)"><b>来源</b></th>
+  </tr></thead>
+  <tbody>
+    <tr><td>1</td><td>448×448 RGB</td><td>(1,3,448,448) tensor</td><td>torchvision transforms</td></tr>
+    <tr><td>2</td><td>tensor</td><td>encoder + decoder features</td><td>Ch3+Ch4：模型 forward</td></tr>
+    <tr><td>3</td><td>features</td><td>448×448 热力图</td><td>Ch2：余弦距离 + 多尺度平均</td></tr>
+    <tr><td>4</td><td>热力图</td><td>平滑热力图</td><td>σ=4.0 高斯平滑</td></tr>
+    <tr><td>5</td><td>平滑热力图</td><td>anomaly_score</td><td>Ch5：top-0.1% 均值</td></tr>
+  </tbody>
+</table>
+
+<callout emoji="💡" background-color="rgb(240,251,239)" border-color="rgb(142,224,133)">
+  <p>为什么是 top-0.1% 而不是 max？一张 448×448 图有 200,704 个像素。单像素 max 对噪声太敏感。取最异常的 ~200 个像素求均值，既保留异常信号又降低随机噪声。</p>
+</callout>
+
+<h2>7.3 掩码保存：连续值，不二值化</h2>
+
+<callout emoji="⚠️" background-color="rgb(255,248,230)" border-color="rgb(250,200,120)">
+  <p><b>❌ 错误：</b>设阈值二值化再保存。<b>✅ 正确：</b>保存原始连续值（0~1），让平台算 AUROC。</p>
+  <p>AUROC 需要在所有可能的阈值下评估。二值化 = 只提交了一个点，不是整条 ROC 曲线。</p>
+</callout>
+
+<pre lang="python" caption="正确保存掩码"><code>
+m = np.clip(amap, 0, 1)           # 余弦距离 [0,2]→[0,1]
+mask_uint8 = (m * 255).astype(np.uint8)
+Image.fromarray(mask_uint8).save(f"{vid}_mask.png")
+</code></pre>
+
+<h2>7.4 全量运行结果</h2>
+
+<table>
+  <colgroup><col width="200"/><col width="120"/></colgroup>
+  <thead><tr>
+    <th background-color="rgb(242,243,245)"><b>指标</b></th>
+    <th background-color="rgb(242,243,245)"><b>数值</b></th>
+  </tr></thead>
+  <tbody>
+    <tr><td>类别数</td><td>50</td></tr>
+    <tr><td>总推理次数</td><td>3,750（50×15×5）</td></tr>
+    <tr><td>总耗时</td><td>~10 分钟</td></tr>
+    <tr><td>平均分数</td><td>0.327</td></tr>
+    <tr><td>分数范围</td><td>0.24 ~ 0.56</td></tr>
+    <tr><td>submission.zip</td><td>100 MB</td></tr>
+  </tbody>
+</table>
+
+<p><b>分数最高的 5 类：</b></p>
+
+<table>
+  <colgroup><col width="220"/><col width="80"/><col width="80"/></colgroup>
+  <thead><tr>
+    <th background-color="rgb(242,243,245)"><b>类别</b></th>
+    <th background-color="rgb(242,243,245)"><b>均值</b></th>
+    <th background-color="rgb(242,243,245)"><b>σ</b></th>
+  </tr></thead>
+  <tbody>
+    <tr><td>battery</td><td>0.559</td><td>0.080</td></tr>
+    <tr><td>lithium_battery_plug</td><td>0.411</td><td>0.013</td></tr>
+    <tr><td>button_battery_holder</td><td>0.380</td><td>0.014</td></tr>
+    <tr><td>PLCC_socket</td><td>0.376</td><td>0.012</td></tr>
+    <tr><td>ingot_buckle</td><td>0.372</td><td>0.032</td></tr>
+  </tbody>
+</table>
+
+<p><b>分数最低的 5 类：</b></p>
+
+<table>
+  <colgroup><col width="220"/><col width="80"/><col width="80"/></colgroup>
+  <thead><tr>
+    <th background-color="rgb(242,243,245)"><b>类别</b></th>
+    <th background-color="rgb(242,243,245)"><b>均值</b></th>
+    <th background-color="rgb(242,243,245)"><b>σ</b></th>
+  </tr></thead>
+  <tbody>
+    <tr><td>smd_receiver_module</td><td>0.278</td><td>0.025</td></tr>
+    <tr><td>power_jack</td><td>0.283</td><td>0.009</td></tr>
+    <tr><td>motor_plug</td><td>0.267</td><td>0.012</td></tr>
+    <tr><td>purple_clay_pot</td><td>0.240</td><td>0.039</td></tr>
+  </tbody>
+</table>
+
+<callout emoji="🔑" background-color="rgb(240,251,239)" border-color="rgb(142,224,133)">
+  <p><b>为什么 0.33 不是 0.5？</b>AUROC 不在乎绝对值大小，只在乎<b>排序一致性</b>。如果缺陷样本分数 0.35，正常样本 0.30，AUROC=1.0。</p>
+  <p>三个信号：① battery 明显偏高（0.56±0.08），要么真有缺陷要么模型敏感；② 38/50 类集中在 0.30~0.40，模型稳定；③ purple_clay_pot 垫底（0.24），B 榜需要重点关注。</p>
+</callout>
+
+<hr/>
+
+<h1>🔬 检查清单</h1>
+
+<ul>
+  <li>流水线跑几个类？→ <b>50 个全部</b>，3,750 次推理</li>
+  <li>总分均值？→ 0.327（50 类平均）</li>
+  <li>分数最高的类？→ battery（0.559）</li>
+  <li>分数最低的类？→ purple_clay_pot（0.240）</li>
+  <li>融合策略？→ Max（Ch6 验证最优）</li>
+  <li>掩码用二值化还是连续值？→ <b>连续值</b>（要整条 ROC 曲线）</li>
+  <li>submission.zip 多大？→ 100 MB</li>
+</ul>
+
+<hr/>
+
+<h1>❓ 新问题</h1>
+
+<p>A 榜的 50 个类都是 INP-Former 训练时见过的。B 榜的 50 个新类呢？模型从没见过它们——没有可学习的原型，没有正常纹理的知识。</p>
+
+<p><b>→ Ch8: B 榜零样本 — 如何让模型判断从未见过的零件是否异常？</b></p>
+
+<hr/>
+
+<p>📷 图7.1：50 类 Anomaly Score 排名柱状图</p>
+<p>📷 图7.2：分数分布直方图</p>
+
+</doc>
