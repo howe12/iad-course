@@ -1,0 +1,214 @@
+<doc>
+
+<callout emoji="🦾" background-color="rgb(245,240,255)" border-color="rgb(130,80,230)">
+  <h2>INP-Former + DINOv2 拿了 56 分。下一步：站在 400M 图文对的肩膀上。</h2>
+  <p>DINOv2 预训练见过 142M 张纯图片。CLIP 预训练见过 <b>400M 对（图片+文字）</b>——它知道"damaged"、"broken"、"crack" 这些词和什么样的图片特征对应。</p>
+  <p>AnomalyCLIP 的核心思想：<b>不改 CLIP 本体，只学"怎么提问"。</b>几百个参数，5 分钟训练，就能把 400M 的知识搬运到你的 50 类工业产品上。</p>
+</callout>
+
+<h1>🎯 学习目标</h1>
+
+<table>
+  <colgroup><col width="140"/><col width="280"/><col width="280"/></colgroup>
+  <thead><tr>
+    <th background-color="rgb(242,243,245)"><b>维度</b></th>
+    <th background-color="rgb(242,243,245)"><b>🔴 学习前</b></th>
+    <th background-color="rgb(242,243,245)"><b>🟢 学习后</b></th>
+  </tr></thead>
+  <tbody>
+    <tr><td><b>CLIP vs DINOv2</b></td><td>"都是 ViT，没什么区别"</td><td>理解图文对齐带来的语义优势</td></tr>
+    <tr><td><b>Prompt Learning</b></td><td>"微调就是改模型参数"</td><td>理解"只学怎么提问"的范式</td></tr>
+    <tr><td><b>Lv1/Lv2/Lv3</b></td><td>不知道改到什么程度</td><td>三个层次的权衡：参数 vs 风险</td></tr>
+  </tbody>
+</table>
+
+<hr/>
+
+<h1>📖 主体内容</h1>
+
+<h2>10.1 为什么 CLIP 的零样本不 work，但 Prompt Learning 可以？</h2>
+
+<h3>回顾 Ch8：零样本 CLIP 的失败</h3>
+
+<table>
+  <colgroup><col width="160"/><col width="250"/><col width="250"/></colgroup>
+  <thead><tr>
+    <th background-color="rgb(242,243,245)"></th>
+    <th background-color="rgb(242,243,245)"><b>零样本 CLIP（Ch8）</b></th>
+    <th background-color="rgb(242,243,245)"><b>Prompt Learning（本章）</b></th>
+  </tr></thead>
+  <tbody>
+    <tr><td><b>方法</b></td><td>"a damaged battery" vs "a perfect battery"</td><td>从数据中学"什么是缺陷"</td></tr>
+    <tr><td><b>Prompt</b></td><td>手写英文句子</td><td><b>可学习的向量</b></td></tr>
+    <tr><td><b>A 榜</b></td><td>全挤在 0.5 附近——无效</td><td>预期 50-70 分——有效</td></tr>
+    <tr><td><b>核心问题</b></td><td>CLIP 见过电池，但没见过"电池的焊点缺陷"长什么样</td><td>让模型从 5000 张正常图里<b>自学</b>"正常产品应该和这句话对齐"</td></tr>
+  </tbody>
+</table>
+
+<callout emoji="💡" background-color="rgb(235,245,255)" border-color="rgb(80,150,230)">
+  <p><b>类比：</b>你问一个没见过工业缺陷的人"这个东西坏了吗？"——他猜不准。但你给他看 5000 张正常的，告诉他"正常的就靠近这句话，不正常的远离"——他学会了。</p>
+</callout>
+
+<h2>10.2 Prompt Learning 的工作原理</h2>
+
+<h3>手写 Prompt 的问题</h3>
+
+<table>
+  <colgroup><col width="300"/><col width="360"/></colgroup>
+  <tbody>
+    <tr><td><b>手写："a damaged photo of a battery"</b></td><td>CLIP 理解：电池破裂、漏液</td></tr>
+    <tr><td><b>实际缺陷</b></td><td>焊点虚焊、引脚氧化、标签偏移</td></tr>
+    <tr><td><b>结果</b></td><td>CLIP 的"damaged"和你需要的"defect"不是一回事</td></tr>
+  </tbody>
+</table>
+
+<h3>可学习 Prompt：让模型自己定义"什么是异常"</h3>
+
+<callout emoji="🔑" background-color="rgb(255,245,235)" border-color="rgb(250,150,80)">
+  <h3>核心创新</h3>
+  <p>不是手写 "damaged"，而是初始化几个随机向量 v_normal 和 v_abnormal，让模型从你的正常产品数据中学出这些向量的含义。</p>
+</callout>
+
+```python
+# 初始化（完全随机，不知道含义）
+v_normal  = torch.randn(4, 768)   # 4 个 token × 768 维
+v_abnormal = torch.randn(4, 768)
+
+# 训练时（只看正常图）
+for img in normal_images:  # 5000 张
+    img_feat = CLIP.encode_image(img)  # CLIP 本体 🔒 冻结
+    
+    # 用可学习向量生成 prompt 特征
+    text_feat_normal   = prompt_learner(v_normal)   # "正常咒语"
+    text_feat_abnormal = prompt_learner(v_abnormal)  # "异常咒语"
+    
+    # 正常图 → 应该靠近"正常咒语"，远离"异常咒语"
+    sim_normal   = cosine(img_feat, text_feat_normal)
+    sim_abnormal = cosine(img_feat, text_feat_abnormal)
+    
+    loss = -log(exp(sim_normal) / (exp(sim_normal) + exp(sim_abnormal)))
+    
+    # 🔙 反向传播 → 只更新 v_normal 和 v_abnormal
+    # CLIP 本体一动不动！
+```
+
+<p><b>训练量对比：</b></p>
+
+<table>
+  <colgroup><col width="180"/><col width="160"/><col width="160"/><col width="160"/></colgroup>
+  <thead><tr>
+    <th background-color="rgb(242,243,245)"></th>
+    <th background-color="rgb(242,243,245)"><b>DINOv2 微调 (Ch9)</b></th>
+    <th background-color="rgb(242,243,245)"><b>Prompt Learning (Lv1)</b></th>
+    <th background-color="rgb(242,243,245)"><b>Prompt + Adapter (Lv2)</b></th>
+  </tr></thead>
+  <tbody>
+    <tr><td><b>训练参数</b></td><td>39M</td><td><b>~3K</b>（2 prompt × 4 tokens × 768）</td><td><b>~1M</b>（+ Adapter）</td></tr>
+    <tr><td><b>训练时间</b></td><td>72 分钟</td><td><b>5 分钟</b></td><td><b>15 分钟</b></td></tr>
+    <tr><td><b>CLIP 本体</b></td><td>—</td><td>🔒 冻结</td><td>🔒 冻结</td></tr>
+  </tbody>
+</table>
+
+<h2>10.3 为什么需要 Level 2（Prompt + Adapter）？</h2>
+
+<h3>Level 1 的局限</h3>
+
+<p>纯 Prompt Learning 只改了"怎么提问"，但 CLIP 的视觉编码器仍然是通用的——它提取的特征更适合"这是猫还是狗"，而不是"这个焊点正常吗"。</p>
+
+<h3>Level 2 解法：插入 Adapter</h3>
+
+<p>在 CLIP 的每层 Transformer 旁边插入一个小型适配器，不改原参数，只学"翻译"：</p>
+
+```
+原始 CLIP 输出:  [0.5, 0.3, 0.1, ...]  ← 通用视觉
+      +
+Adapter 修正:    [0.1, 0.0, -0.2, ...] ← 工业适配（1M 参数）
+      ↓
+最终输出:         [0.6, 0.3, -0.1, ...] ← 工业特征
+```
+
+<table>
+  <colgroup><col width="160"/><col width="250"/><col width="250"/></colgroup>
+  <thead><tr>
+    <th background-color="rgb(242,243,245)"></th>
+    <th background-color="rgb(242,243,245)"><b>完全微调 CLIP</b></th>
+    <th background-color="rgb(242,243,245)"><b>Adapter（Lv2）</b></th>
+  </tr></thead>
+  <tbody>
+    <tr><td><b>CLIP 常识</b></td><td>可能被覆盖（灾难性遗忘）</td><td>完全保留</td></tr>
+    <tr><td><b>工业适应性</b></td><td>高（但丢掉了语义）</td><td>高（双重知识）</td></tr>
+    <tr><td><b>类比</b></td><td>把专家洗脑重训</td><td>给专家配一个翻译</td></tr>
+  </tbody>
+</table>
+
+<h2>10.4 推理流程</h2>
+
+```
+测试图片
+    ↓
+CLIP ViT（冻结） + Adapter → 适配后的 patch 特征
+    ↓
+逐 patch 计算:
+    sim_abnormal = cosine(patch_feat, abnormal_prompt)
+    sim_normal   = cosine(patch_feat, normal_prompt)
+    anomaly[patch] = sim_abnormal - sim_normal
+    ↓
+anomaly_map → 高斯平滑 → 取 top-K 均值 → anomaly score
+```
+
+<h2>10.5 和我们 INP-Former 的配合</h2>
+
+<table>
+  <colgroup><col width="160"/><col width="250"/><col width="250"/></colgroup>
+  <thead><tr>
+    <th background-color="rgb(242,243,245)"></th>
+    <th background-color="rgb(242,243,245)"><b>INP-Former (Ch9)</b></th>
+    <th background-color="rgb(242,243,245)"><b>AnomalyCLIP Lv2 (Ch10)</b></th>
+  </tr></thead>
+  <tbody>
+    <tr><td><b>范式</b></td><td>重建对比：Encoder vs Decoder</td><td>语义对齐：图片 vs Prompt</td></tr>
+    <tr><td><b>擅长</b></td><td>纹理异常、局部缺陷</td><td>语义异常、整体不协调</td></tr>
+    <tr><td><b>预训练</b></td><td>142M 纯图片</td><td>400M 图文对</td></tr>
+    <tr><td><b>A 榜</b></td><td>56.14</td><td>预期 55-65</td></tr>
+  </tbody>
+</table>
+
+<callout emoji="🔀" background-color="rgb(235,255,240)" border-color="rgb(80,200,100)">
+  <h3>融合策略</h3>
+  <p><b>INP 60% + AnomalyCLIP 40% → 预期 65-75 分</b></p>
+  <p>两个模型的信号来源不同——纹理 vs 语义 ——天然互补，融合收益高。</p>
+</callout>
+
+<h2>10.6 Level 1 vs Level 2 vs Level 3 总结</h2>
+
+<table>
+  <colgroup><col width="100"/><col width="180"/><col width="180"/><col width="200"/></colgroup>
+  <thead><tr>
+    <th background-color="rgb(242,243,245)"><b>Level</b></th>
+    <th background-color="rgb(242,243,245)"><b>改什么</b></th>
+    <th background-color="rgb(242,243,245)"><b>参数</b></th>
+    <th background-color="rgb(242,243,245)"><b>适用场景</b></th>
+  </tr></thead>
+  <tbody>
+    <tr><td><b>Lv1: Prompt</b></td><td>只学 prompt 向量</td><td>~3K</td><td>快速验证 CLIP 是否可用</td></tr>
+    <tr><td><b>Lv2: +Adapter</b></td><td>prompt + 特征适配器</td><td>~1M</td><td>适配工业领域（推荐）</td></tr>
+    <tr><td><b>Lv3: 完全微调</b></td><td>prompt + CLIP 本体</td><td>~300M</td><td>⚠️ 高风险，灾难性遗忘</td></tr>
+  </tbody>
+</table>
+
+<hr/>
+
+<h2>🔑 关键概念</h2>
+
+<table>
+  <colgroup><col width="180"/><col width="480"/></colgroup>
+  <tbody>
+    <tr><td><b>Prompt Learning</b></td><td>不改模型参数，只学"怎么提问"。用可学习向量替代手写 prompt。</td></tr>
+    <tr><td><b>Adapter</b></td><td>在冻结的预训练模型层间插入小型可学习模块，做特征翻译。</td></tr>
+    <tr><td><b>灾难性遗忘</b></td><td>完全微调预训练模型会覆盖原有知识，失去预训练的核心优势。</td></tr>
+    <tr><td><b>图文对齐</b></td><td>CLIP 的 400M 图文对训练让模型理解了语言和视觉的对应关系。</td></tr>
+    <tr><td><b>DINOv2 vs CLIP</b></td><td>纯视觉 142M vs 图文 400M。后者有"damaged/defect"的语义概念。</td></tr>
+  </tbody>
+</table>
+
+</doc>
