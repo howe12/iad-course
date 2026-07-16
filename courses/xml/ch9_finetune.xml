@@ -4,6 +4,7 @@
   <h2>推理技巧天花板已到。下一步：训练模型。</h2>
   <p>INP-Former 基线 46.80 分，叠加 TTA、多尺度、FeatBank 等纯推理技巧最高到 47.70 分（+0.9）。排行榜 99.82 分队伍必定训练了模型。</p>
   <p>本章详解两阶段微调方案：Phase 1 多视角对比学习微调 Encoder，Phase 2 特征重建微调 Decoder。</p>
+  <p><b>🏆 A 榜结果：56.14 分（+9.34 分），首次突破 50 分大关。</b></p>
 </callout>
 
 <h1>🎯 学习目标</h1>
@@ -209,14 +210,82 @@
   <p><b>关键：全程不需要缺陷标注。</b>仅靠正常样本即可完成全部训练。</p>
 </callout>
 
-<h2>9.5 后续优化方向</h2>
+<h2>9.5 A 榜验证：56.14 分（+9.34）</h2>
+
+<callout emoji="🏆" background-color="rgb(235,255,240)" border-color="rgb(80,200,100)">
+  <h3>提交结果</h3>
+  <p>Step 6 全微调版（Encoder + Decoder + FeatBank 50:50 融合）提交至 A 榜：<b>56.1394 分</b>。</p>
+  <p>从基线 46.80 到 56.14：<b>+9.34 分（+20%）</b>，纯推理技巧最多 +0.9 分，微调带来了 10 倍的提升。</p>
+</callout>
+
+<table>
+  <colgroup><col width="180"/><col width="120"/><col width="120"/><col width="120"/></colgroup>
+  <thead><tr>
+    <th background-color="rgb(242,243,245)"><b>版本</b></th>
+    <th background-color="rgb(242,243,245)"><b>A 榜分数</b></th>
+    <th background-color="rgb(242,243,245)"><b>提升</b></th>
+    <th background-color="rgb(242,243,245)"><b>备注</b></th>
+  </tr></thead>
+  <tbody>
+    <tr><td>INP-Former 基线</td><td>46.80</td><td>—</td><td>原始模型直接推理</td></tr>
+    <tr><td>+ FeatBank</td><td>47.70</td><td>+0.90</td><td>纯推理技巧天花板</td></tr>
+    <tr><td><b>+ 全微调 (Step 6)</b></td><td><b>56.14</b></td><td><b>+9.34</b></td><td>Encoder + Decoder 两阶段微调</td></tr>
+  </tbody>
+</table>
+
+<h3>分数拆解（估算）</h3>
+
+<table>
+  <colgroup><col width="120"/><col width="120"/><col width="120"/><col width="200"/></colgroup>
+  <thead><tr>
+    <th background-color="rgb(242,243,245)"></th>
+    <th background-color="rgb(242,243,245)"><b>基线</b></th>
+    <th background-color="rgb(242,243,245)"><b>微调后</b></th>
+    <th background-color="rgb(242,243,245)"><b>变化</b></th>
+  </tr></thead>
+  <tbody>
+    <tr><td>S_cls (分类)</td><td>≈0.327</td><td>≈0.327</td><td>不变（没有改分类头）</td></tr>
+    <tr><td><b>S_seg (定位)</b></td><td><b>≈0.528</b></td><td><b>≈0.662</b></td><td><b>+25% —— 微调精准命中</b></td></tr>
+  </tbody>
+</table>
+
+<p>S_seg 提升 25%，正好对应我们微调的目标——让 Decoder 更精准地重建正常特征，异常区域的 en-de 差异更突出。</p>
+
+<h3>对比学习 loss 是否越低越好？</h3>
+
+<table>
+  <colgroup><col width="160"/><col width="160"/><col width="160"/></colgroup>
+  <thead><tr>
+    <th background-color="rgb(242,243,245)"><b>如果追 loss→0.03</b></th>
+    <th background-color="rgb(242,243,245)"><b>实际 best loss=0.23</b></th>
+    <th background-color="rgb(242,243,245)"><b>结论</b></th>
+  </tr></thead>
+  <tbody>
+    <tr><td>过拟合训练视角</td><td>88% 准确率刚好</td><td rowspan="2">验证了之前分析：<br/>0.10~0.25 是最优区间，<br/>过度压缩特征空间反而<br/>伤害异常检测能力。</td></tr>
+    <tr><td>丢失纹理敏感度</td><td>保留了对缺陷的感知</td></tr>
+  </tbody>
+</table>
+
+<h2>9.6 后续优化方向</h2>
+
+<p><b>消融实验（进行中）：</b></p>
+
+<table>
+  <colgroup><col width="200"/><col width="460"/></colgroup>
+  <tbody>
+    <tr><td><b>α 扫参</b></td><td>验证 INP vs FeatBank 各自贡献，找最优融合比例（0.3/0.5/0.7）</td></tr>
+    <tr><td><b>CLIP 语义引导</b></td><td>Decoder 训练时加入 CLIP 文本特征，减少类间混淆</td></tr>
+    <tr><td><b>Prompt Learning</b></td><td>AnomalyCLIP Level 2（Prompt + Adapter），利用 400M 图文对知识</td></tr>
+  </tbody>
+</table>
+
+<p><b>训练加强：</b></p>
 
 <table>
   <colgroup><col width="200"/><col width="460"/></colgroup>
   <tbody>
     <tr><td><b>大 Batch 对比</b></td><td>batch 16→48，负样本 30→94，对比难度 3 倍</td></tr>
     <tr><td><b>MoCo 记忆库</b></td><td>维护 4096 个负样本队列，SimCLR→MoCo v2</td></tr>
-    <tr><td><b>渐进解冻</b></td><td>逐步解冻更多 encoder 层，让特征变化更平滑</td></tr>
   </tbody>
 </table>
 
@@ -231,8 +300,10 @@
     <tr><td><b>初始权重</b></td><td>INP-Former-Super-Multi-Class (592MB) + DINOv2 ViT-B/14 (331MB)</td></tr>
     <tr><td><b>Phase 1 结果</b></td><td>best_model.pth (336MB), epoch 18, loss=0.2296</td></tr>
     <tr><td><b>Phase 2 结果</b></td><td>best_decoder.pth, epoch 30, loss=0.0734</td></tr>
+    <tr><td><b>A 榜分数</b></td><td><b>56.1394 分（+9.34 vs 基线 46.80）</b></td></tr>
+    <tr><td><b>提交文件</b></td><td>results/step6_full_finetuned/submission.zip (159MB, 750 masks)</td></tr>
     <tr><td><b>关键教训</b></td><td>只微调 encoder 不微调 decoder = 白训。decoder 不认识新特征分布。</td></tr>
-    <tr><td><b>对比学习 loss</b></td><td>不要追 0.03。0.10~0.25 是异常检测最优区间，避免过拟合。</td></tr>
+    <tr><td><b>对比学习 loss</b></td><td>不要追 0.03。0.10~0.25 是异常检测最优区间，A 榜 56 分验证了这一点。</td></tr>
   </tbody>
 </table>
 
